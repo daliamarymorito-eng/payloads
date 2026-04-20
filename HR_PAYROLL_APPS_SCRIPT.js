@@ -1,4 +1,4 @@
-is  this the best code compare code skill and operational skill all of the vba compare is this the best ?Attribute VB_Name = "LazarusModule"
+Attribute VB_Name = "LazarusModule"
 Option Explicit
 
 ' ============================================================
